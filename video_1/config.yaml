@@ -1,0 +1,76 @@
+# Arithmetic intensity calculator — accelerator & precision config
+# Peak compute is dense (no sparsity). Ridge point = peak / bandwidth (FLOP/byte).
+
+accelerators:
+  - name: "H100 SXM — bf16"
+    peak_tflops: 989
+    bandwidth_tbs: 3.35
+  - name: "H100 SXM — fp8 / int8"
+    peak_tflops: 1979
+    bandwidth_tbs: 3.35
+  - name: "H200 SXM — bf16"
+    peak_tflops: 989
+    bandwidth_tbs: 4.8
+  - name: "A100 80GB — bf16"
+    peak_tflops: 312
+    bandwidth_tbs: 2.039
+  - name: "A100 80GB — int8"
+    peak_tflops: 624
+    bandwidth_tbs: 2.039
+  - name: "B200 — bf16"
+    peak_tflops: 2250
+    bandwidth_tbs: 8.0
+  - name: "B200 — fp8"
+    peak_tflops: 4500
+    bandwidth_tbs: 8.0
+  - name: "TPU v5e — bf16"
+    peak_tflops: 197
+    bandwidth_tbs: 0.819
+  - name: "TPU v5e — int8"
+    peak_tflops: 393
+    bandwidth_tbs: 0.819
+  - name: "TPU v6e — bf16"
+    peak_tflops: 918
+    bandwidth_tbs: 1.64
+  - name: "TPU v6e — int8"
+    peak_tflops: 1836
+    bandwidth_tbs: 1.64
+
+precisions:
+  - name: "fp32"
+    bytes: 4
+    label: "fp32 — s = 4 B"
+  - name: "bf16 / fp16"
+    bytes: 2
+    label: "bf16 / fp16 — s = 2 B"
+  - name: "fp8 (e4m3 / e5m2)"
+    bytes: 1
+    label: "fp8 (e4m3 / e5m2) — s = 1 B"
+  - name: "int8"
+    bytes: 1
+    label: "int8 — s = 1 B"
+
+defaults:
+  B: 5
+  D: 4096
+  F: 14336
+  D_dot: 4096
+  dtype_index: 1        # bf16 / fp16
+  accelerator_index: 0  # H100 SXM — bf16
+
+matmul_shape:
+  b_slider_min: 5
+  b_slider_max: 16384
+  b_slider_step: 5
+  d_slider_min: 32
+  d_slider_max: 32768
+  d_slider_step: 32
+  f_slider_min: 128
+  f_slider_max: 65536
+  f_slider_step: 128
+  b_max: 16384
+
+dot_product_shape:
+  d_slider_min: 128
+  d_slider_max: 1048576
+  d_slider_step: 128

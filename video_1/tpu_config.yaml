@@ -1,0 +1,89 @@
+# TPU specs — chip compute/memory and interconnect bandwidths.
+# FLOPs/s/chip and HBM BW/chip are dense peak numbers (no sparsity).
+# ICI BW/link is per-link, one-way and bidirectional, in bytes/s.
+
+tpus:
+  - name: "TPU v3"
+    pod_size: "32x32"
+    host_size: "4x2"
+    hbm_capacity_gb: 32
+    hbm_bw_bytes_s: 9.0e+11
+    flops_bf16: 1.4e+14
+    flops_int8: 1.4e+14
+    ici_bw_oneway_bytes_s: 1.0e+11
+    ici_bw_bidi_bytes_s: 2.0e+11
+  - name: "TPU v4p"
+    pod_size: "16x16x16"
+    host_size: "2x2x1"
+    hbm_capacity_gb: 32
+    hbm_bw_bytes_s: 1.2e+12
+    flops_bf16: 2.75e+14
+    flops_int8: 2.75e+14
+    ici_bw_oneway_bytes_s: 4.5e+10
+    ici_bw_bidi_bytes_s: 9.0e+10
+  - name: "TPU v5p"
+    pod_size: "16x20x28"
+    host_size: "2x2x1"
+    hbm_capacity_gb: 96
+    hbm_bw_bytes_s: 2.8e+12
+    flops_bf16: 4.59e+14
+    flops_int8: 9.18e+14
+    ici_bw_oneway_bytes_s: 9.0e+10
+    ici_bw_bidi_bytes_s: 1.8e+11
+  - name: "TPU v5e"
+    pod_size: "16x16"
+    host_size: "4x2"
+    hbm_capacity_gb: 16
+    hbm_bw_bytes_s: 8.2e+11
+    flops_bf16: 1.97e+14
+    flops_int8: 3.94e+14
+    ici_bw_oneway_bytes_s: 4.5e+10
+    ici_bw_bidi_bytes_s: 9.0e+10
+  - name: "TPU v6e"
+    pod_size: "16x16"
+    host_size: "4x2"
+    hbm_capacity_gb: 32
+    hbm_bw_bytes_s: 1.6e+12
+    flops_bf16: 9.20e+14
+    flops_int8: 1.84e+15
+    ici_bw_oneway_bytes_s: 9.0e+10
+    ici_bw_bidi_bytes_s: 1.8e+11
+  - name: "TPU7x"
+    pod_size: "4x4x576"
+    host_size: "2x2x1"
+    hbm_capacity_gb: 192
+    hbm_bw_bytes_s: 7.4e+12
+    flops_bf16: 2.30e+15
+    flops_int8: 4.61e+15
+    ici_bw_oneway_bytes_s: 9.0e+10
+    ici_bw_bidi_bytes_s: 1.8e+11
+
+pcie:
+  bandwidth_bytes_s: 1.6e+10   # host DRAM <-> single chip, PCIe
+
+precisions:
+  - name: "bf16"
+    bytes: 2
+    flops_field: "flops_bf16"
+  - name: "int8"
+    bytes: 1
+    flops_field: "flops_int8"
+
+defaults:
+  B: 32
+  D: 4096
+  F: 16384
+  tpu_index: 4        # TPU v6e
+  precision_index: 0  # bf16
+  channel: "PCIe"      # PCIe or ICI
+
+matmul_shape:
+  b_slider_min: 5
+  b_slider_max: 131072
+  b_slider_step: 5
+  d_slider_min: 32
+  d_slider_max: 32768
+  d_slider_step: 32
+  f_slider_min: 128
+  f_slider_max: 131072
+  f_slider_step: 128
