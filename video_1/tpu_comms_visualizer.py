@@ -75,6 +75,32 @@ st.markdown(
     .verdict-box.bound-comms b {{ color: {ACCENT_2}; }}
     .spec-note {{ font-size: 11px; color: {INK_SOFT}; line-height: 1.5; margin-top: 4px; }}
     div[role="radiogroup"] label {{ font-family: 'IBM Plex Mono', monospace; font-size: 13px; }}
+    .stepper-label {{
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 12.5px;
+        color: {INK_SOFT};
+        margin: 2px 0 3px;
+    }}
+    section[data-testid="stSidebar"] div[data-testid="stButton"] button {{
+        font-family: 'IBM Plex Mono', monospace;
+        font-weight: 700;
+        font-size: 18px;
+        color: {ACCENT};
+        background: {BG};
+        border: 1px solid {RULE};
+        border-radius: 8px;
+        padding: 0.15rem 0;
+        min-height: 38px;
+    }}
+    section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {{
+        border-color: {ACCENT};
+        color: {ACCENT};
+    }}
+    section[data-testid="stSidebar"] .stNumberInput input {{
+        text-align: center;
+        font-family: 'IBM Plex Mono', monospace;
+        font-weight: 600;
+    }}
     hr {{ border-color: {RULE}; }}
     </style>
     """,
@@ -100,26 +126,27 @@ def fmt_time(seconds):
         return f"{seconds*1e3:.1f} ms"
     return f"{seconds:.3f} s"
 
-def synced_slider(label, min_v, max_v, default, step, key):
-    """Slider paired with a number input, kept in sync via session_state."""
-    skey, nkey = f"{key}_slider", f"{key}_num"
-    if skey not in st.session_state:
-        st.session_state[skey] = default
+def stepper(label, min_v, max_v, default, step, key):
+    """Number input flanked by -/+ buttons that jump by `step` — built for live demos."""
+    nkey = f"{key}_num"
+    if nkey not in st.session_state:
         st.session_state[nkey] = default
 
-    def _from_slider():
-        st.session_state[nkey] = st.session_state[skey]
+    def _dec():
+        st.session_state[nkey] = max(min_v, st.session_state[nkey] - step)
 
-    def _from_num():
-        st.session_state[skey] = st.session_state[nkey]
+    def _inc():
+        st.session_state[nkey] = min(max_v, st.session_state[nkey] + step)
 
-    col1, col2 = st.columns([2.2, 1])
-    with col1:
-        st.slider(label, min_v, max_v, step=step, key=skey, on_change=_from_slider)
-    with col2:
-        st.number_input(label, min_v, max_v, step=step, key=nkey, on_change=_from_num,
-                         label_visibility="collapsed")
-    return st.session_state[skey]
+    st.markdown(f'<div class="stepper-label">{label}</div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c1:
+        st.button("−", key=f"{key}_dec", on_click=_dec, use_container_width=True)
+    with c2:
+        st.number_input(label, min_v, max_v, step=step, key=nkey, label_visibility="collapsed")
+    with c3:
+        st.button("+", key=f"{key}_inc", on_click=_inc, use_container_width=True)
+    return st.session_state[nkey]
 
 # ------------------------------------------------------------------- ui ----
 header_l, header_r = st.columns([2, 3])
@@ -128,14 +155,14 @@ with header_l:
 
 with st.sidebar:
     st.markdown('<div class="grp-h">Matmul shape</div>', unsafe_allow_html=True)
-    B = synced_slider("B — batch", SHAPE["b_slider_min"], SHAPE["b_slider_max"],
-                       DEFAULTS["B"], SHAPE["b_slider_step"], "B")
+    B = stepper("B — batch", SHAPE["b_slider_min"], SHAPE["b_slider_max"],
+                DEFAULTS["B"], SHAPE["b_slider_step"], "B")
 
-    D = synced_slider("D — model dim", SHAPE["d_slider_min"], SHAPE["d_slider_max"],
-                       DEFAULTS["D"], SHAPE["d_slider_step"], "D")
+    D = stepper("D — model dim", SHAPE["d_slider_min"], SHAPE["d_slider_max"],
+                DEFAULTS["D"], SHAPE["d_slider_step"], "D")
 
-    F = synced_slider("F — hidden dim", SHAPE["f_slider_min"], SHAPE["f_slider_max"],
-                       DEFAULTS["F"], SHAPE["f_slider_step"], "F")
+    F = stepper("F — hidden dim", SHAPE["f_slider_min"], SHAPE["f_slider_max"],
+                DEFAULTS["F"], SHAPE["f_slider_step"], "F")
 
     st.markdown('<div class="grp-h">TPU chip</div>', unsafe_allow_html=True)
     tpu_names = [t["name"] for t in TPUS]

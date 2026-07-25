@@ -139,6 +139,32 @@ st.markdown(
         line-height: 1.5;
         margin-top: 4px;
     }}
+    .stepper-label {{
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 12.5px;
+        color: {INK_SOFT};
+        margin: 2px 0 3px;
+    }}
+    section[data-testid="stSidebar"] div[data-testid="stButton"] button {{
+        font-family: 'IBM Plex Mono', monospace;
+        font-weight: 700;
+        font-size: 18px;
+        color: {ACCENT};
+        background: {BG};
+        border: 1px solid {RULE};
+        border-radius: 8px;
+        padding: 0.15rem 0;
+        min-height: 38px;
+    }}
+    section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {{
+        border-color: {ACCENT};
+        color: {ACCENT};
+    }}
+    section[data-testid="stSidebar"] .stNumberInput input {{
+        text-align: center;
+        font-family: 'IBM Plex Mono', monospace;
+        font-weight: 600;
+    }}
     hr {{ border-color: {RULE}; }}
     </style>
     """,
@@ -146,26 +172,27 @@ st.markdown(
 )
 
 # --------------------------------------------------------------- helpers ---
-def synced_slider(label, min_v, max_v, default, step, key):
-    """Slider paired with a number input, kept in sync via session_state."""
-    skey, nkey = f"{key}_slider", f"{key}_num"
-    if skey not in st.session_state:
-        st.session_state[skey] = default
+def stepper(label, min_v, max_v, default, step, key):
+    """Number input flanked by -/+ buttons that jump by `step` — built for live demos."""
+    nkey = f"{key}_num"
+    if nkey not in st.session_state:
         st.session_state[nkey] = default
 
-    def _from_slider():
-        st.session_state[nkey] = st.session_state[skey]
+    def _dec():
+        st.session_state[nkey] = max(min_v, st.session_state[nkey] - step)
 
-    def _from_num():
-        st.session_state[skey] = st.session_state[nkey]
+    def _inc():
+        st.session_state[nkey] = min(max_v, st.session_state[nkey] + step)
 
-    col1, col2 = st.columns([2.2, 1])
-    with col1:
-        st.slider(label, min_v, max_v, step=step, key=skey, on_change=_from_slider)
-    with col2:
-        st.number_input(label, min_v, max_v, step=step, key=nkey, on_change=_from_num,
-                         label_visibility="collapsed")
-    return st.session_state[skey]
+    st.markdown(f'<div class="stepper-label">{label}</div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c1:
+        st.button("−", key=f"{key}_dec", on_click=_dec, use_container_width=True)
+    with c2:
+        st.number_input(label, min_v, max_v, step=step, key=nkey, label_visibility="collapsed")
+    with c3:
+        st.button("+", key=f"{key}_inc", on_click=_inc, use_container_width=True)
+    return st.session_state[nkey]
 
 def intensity(B, D, F, s):
     return (2 * B * D * F) / (s * (B * D + D * F + B * F))
@@ -193,18 +220,25 @@ st.markdown('<p class="hero-title">Arithmetic Intensity</p>', unsafe_allow_html=
 
 with st.sidebar:
     st.markdown('<div class="grp-h">Matmul shape</div>', unsafe_allow_html=True)
-    B = synced_slider("B — tokens", SHAPE["b_slider_min"], SHAPE["b_slider_max"],
-                       DEFAULTS["B"], SHAPE["b_slider_step"], "B")
+    B = stepper("B — tokens", SHAPE["b_slider_min"], SHAPE["b_slider_max"],
+                DEFAULTS["B"], SHAPE["b_slider_step"], "B")
 
-    D = synced_slider("D — model dim", SHAPE["d_slider_min"], SHAPE["d_slider_max"],
-                       DEFAULTS["D"], SHAPE["d_slider_step"], "D")
+    D = stepper("D — model dim", SHAPE["d_slider_min"], SHAPE["d_slider_max"],
+                DEFAULTS["D"], SHAPE["d_slider_step"], "D")
 
-    F = synced_slider("F — hidden dim", SHAPE["f_slider_min"], SHAPE["f_slider_max"],
-                       DEFAULTS["F"], SHAPE["f_slider_step"], "F")
+    F = stepper("F — hidden dim", SHAPE["f_slider_min"], SHAPE["f_slider_max"],
+                DEFAULTS["F"], SHAPE["f_slider_step"], "F")
 
     st.markdown('<div class="grp-h">Dot product length</div>', unsafe_allow_html=True)
-    D_dot = synced_slider("D — vector length", DOT_SHAPE["d_slider_min"], DOT_SHAPE["d_slider_max"],
-                           DEFAULTS["D_dot"], DOT_SHAPE["d_slider_step"], "D_dot")
+    D_dot = stepper("D — vector length", DOT_SHAPE["d_slider_min"], DOT_SHAPE["d_slider_max"],
+                     DEFAULTS["D_dot"], DOT_SHAPE["d_slider_step"], "D_dot")
+
+    st.markdown('<div class="grp-h">Precision</div>', unsafe_allow_html=True)
+    prec_labels = [p["label"] for p in PRECISIONS]
+    prec_choice = st.selectbox("dtype", prec_labels, index=DEFAULTS["dtype_index"], label_visibility="collapsed")
+    prec = next(p for p in PRECISIONS if p["label"] == prec_choice)
+    s_bytes = prec["bytes"]
+    compute_mult = prec["compute_multiplier"]
 
     st.markdown('<div class="grp-h">Accelerator</div>', unsafe_allow_html=True)
     acc_names = [a["name"] for a in ACCELERATORS] + ["Custom…"]
@@ -215,16 +249,16 @@ with st.sidebar:
         bw = st.number_input("Memory bandwidth — TB/s", min_value=0.01, value=3.35, step=0.01)
     else:
         acc = next(a for a in ACCELERATORS if a["name"] == acc_choice)
-        peak = st.number_input("Peak compute — TFLOP/s", min_value=1.0, value=float(acc["peak_tflops"]), step=1.0)
+        peak_default = acc["peak_bf16_tflops"] * compute_mult
+        peak = st.number_input(
+            "Peak compute — TFLOP/s", min_value=1.0, value=float(peak_default), step=1.0,
+            help=f"{acc['peak_bf16_tflops']:.0f} TFLOP/s bf16 baseline × {compute_mult:g}× for {prec_choice}",
+        )
         bw = st.number_input("Memory bandwidth — TB/s", min_value=0.01, value=float(acc["bandwidth_tbs"]), step=0.01)
 
-    st.markdown('<div class="grp-h">Precision</div>', unsafe_allow_html=True)
-    prec_labels = [p["label"] for p in PRECISIONS]
-    prec_choice = st.selectbox("dtype", prec_labels, index=DEFAULTS["dtype_index"], label_visibility="collapsed")
-    s_bytes = next(p["bytes"] for p in PRECISIONS if p["label"] == prec_choice)
     st.markdown(
-        f"<p class='spec-note'>Precision sets bytes per element only. Bump peak compute "
-        f"yourself when you switch — int8 and fp8 tensor cores run ~2× dense bf16.</p>",
+        f"<p class='spec-note'>Peak compute auto-scales with precision from each chip's bf16 "
+        f"baseline (int8/fp8 ≈2× denser, fp32 ≈0.5×). Edit the number above to override.</p>",
         unsafe_allow_html=True,
     )
 
@@ -437,13 +471,15 @@ for a in ACCELERATORS:
     is_active = a["name"] == acc_choice
     row_bg = "background:rgba(94,234,212,0.08);" if is_active else ""
     name_color = ACCENT if is_active else INK
+    peak_at_prec = a["peak_bf16_tflops"] * compute_mult
     rows_html += (
         f"<tr style='{row_bg}border-bottom:1px solid {RULE}'>"
         f"<td style='padding:7px 10px;color:{name_color};font-weight:{600 if is_active else 400}'>{a['name']}</td>"
-        f"<td style='padding:7px 10px;text-align:right'>{fmt(a['peak_tflops'])}</td>"
+        f"<td style='padding:7px 10px;text-align:right'>{fmt(a['peak_bf16_tflops'])}</td>"
+        f"<td style='padding:7px 10px;text-align:right'>{fmt(peak_at_prec)}</td>"
         f"<td style='padding:7px 10px;text-align:right'>{a['bandwidth_tbs']:.2f}</td>"
         f"<td style='padding:7px 10px;text-align:right;color:{ACCENT_2};font-weight:600'>"
-        f"{fmt(a['peak_tflops']/a['bandwidth_tbs'])}</td>"
+        f"{fmt(peak_at_prec/a['bandwidth_tbs'])}</td>"
         f"</tr>"
     )
 
@@ -456,7 +492,9 @@ st.markdown(
             <th style="text-align:left;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
                        font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">Chip</th>
             <th style="text-align:right;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
-                       font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">TFLOP/s</th>
+                       font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">TFLOP/s bf16</th>
+            <th style="text-align:right;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
+                       font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">TFLOP/s @ {prec_choice}</th>
             <th style="text-align:right;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
                        font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">TB/s</th>
             <th style="text-align:right;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
