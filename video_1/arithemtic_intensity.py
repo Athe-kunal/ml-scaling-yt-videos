@@ -204,6 +204,17 @@ def fmt(v, p=3):
         return f"{v:,.0f}"
     return f"{float(f'{v:.{p}g}'):g}"
 
+def fmt_sci(v, sig=3):
+    """Scientific notation like '3.9e14' — no leading zeros, no '+' on the exponent."""
+    if not math.isfinite(v):
+        return "∞"
+    if v == 0:
+        return "0"
+    exp = math.floor(math.log10(abs(v)))
+    mantissa = v / (10 ** exp)
+    mantissa_str = f"{mantissa:.{sig - 1}f}".rstrip("0").rstrip(".")
+    return f"{mantissa_str}e{exp}"
+
 def fmt_time(seconds):
     if not math.isfinite(seconds):
         return "∞"
@@ -245,16 +256,19 @@ with st.sidebar:
     acc_choice = st.selectbox("Preset", acc_names, index=DEFAULTS["accelerator_index"])
 
     if acc_choice == "Custom…":
-        peak = st.number_input("Peak compute — TFLOP/s", min_value=1.0, value=989.0, step=1.0)
-        bw = st.number_input("Memory bandwidth — TB/s", min_value=0.01, value=3.35, step=0.01)
+        peak_flops = st.number_input("Peak compute — FLOP/s", min_value=1e9, value=9.89e14,
+                                      step=1e12, format="%.3e")
+        bw_bytes = st.number_input("Memory bandwidth — bytes/s", min_value=1e7, value=3.35e12,
+                                    step=1e10, format="%.3e")
     else:
         acc = next(a for a in ACCELERATORS if a["name"] == acc_choice)
-        peak_default = acc["peak_bf16_tflops"] * compute_mult
-        peak = st.number_input(
-            "Peak compute — TFLOP/s", min_value=1.0, value=float(peak_default), step=1.0,
-            help=f"{acc['peak_bf16_tflops']:.0f} TFLOP/s bf16 baseline × {compute_mult:g}× for {prec_choice}",
+        peak_default = acc["peak_bf16_flops"] * compute_mult
+        peak_flops = st.number_input(
+            "Peak compute — FLOP/s", min_value=1e9, value=float(peak_default), step=1e12, format="%.3e",
+            help=f"{fmt_sci(acc['peak_bf16_flops'])} FLOP/s bf16 baseline × {compute_mult:g}× for {prec_choice}",
         )
-        bw = st.number_input("Memory bandwidth — TB/s", min_value=0.01, value=float(acc["bandwidth_tbs"]), step=0.01)
+        bw_bytes = st.number_input("Memory bandwidth — bytes/s", min_value=1e7,
+                                    value=float(acc["bandwidth_bytes_s"]), step=1e10, format="%.3e")
 
     st.markdown(
         f"<p class='spec-note'>Peak compute auto-scales with precision from each chip's bf16 "
@@ -263,8 +277,6 @@ with st.sidebar:
     )
 
 # --------------------------------------------------------------- compute ---
-peak_flops = peak * 1e12
-bw_bytes = bw * 1e12
 ridge = peak_flops / bw_bytes
 
 tab_matmul, tab_dot = st.tabs(["Matmul", "Dot product"])
@@ -368,7 +380,7 @@ with tab_matmul:
     c1.metric("Intensity at B", f"{fmt(I_cur)}", "FLOP/byte")
     c2.metric("Ridge point", f"{fmt(ridge)}", "FLOP/byte")
     c3.metric("Break-even B*", fmt(Bs, 4) if math.isfinite(Bs) else "never", "tokens")
-    c4.metric("Achieved", f"{fmt(achieved/1e12)}", "TFLOP/s")
+    c4.metric("Achieved", f"{fmt_sci(achieved)}", "FLOP/s")
 
     with c5:
         st.metric("Utilization of peak", f"{util*100:.1f}", "%")
@@ -471,15 +483,15 @@ for a in ACCELERATORS:
     is_active = a["name"] == acc_choice
     row_bg = "background:rgba(94,234,212,0.08);" if is_active else ""
     name_color = ACCENT if is_active else INK
-    peak_at_prec = a["peak_bf16_tflops"] * compute_mult
+    peak_at_prec = a["peak_bf16_flops"] * compute_mult
     rows_html += (
         f"<tr style='{row_bg}border-bottom:1px solid {RULE}'>"
         f"<td style='padding:7px 10px;color:{name_color};font-weight:{600 if is_active else 400}'>{a['name']}</td>"
-        f"<td style='padding:7px 10px;text-align:right'>{fmt(a['peak_bf16_tflops'])}</td>"
-        f"<td style='padding:7px 10px;text-align:right'>{fmt(peak_at_prec)}</td>"
-        f"<td style='padding:7px 10px;text-align:right'>{a['bandwidth_tbs']:.2f}</td>"
+        f"<td style='padding:7px 10px;text-align:right'>{fmt_sci(a['peak_bf16_flops'])}</td>"
+        f"<td style='padding:7px 10px;text-align:right'>{fmt_sci(peak_at_prec)}</td>"
+        f"<td style='padding:7px 10px;text-align:right'>{fmt_sci(a['bandwidth_bytes_s'])}</td>"
         f"<td style='padding:7px 10px;text-align:right;color:{ACCENT_2};font-weight:600'>"
-        f"{fmt(peak_at_prec/a['bandwidth_tbs'])}</td>"
+        f"{fmt(peak_at_prec/a['bandwidth_bytes_s'])}</td>"
         f"</tr>"
     )
 
@@ -492,11 +504,11 @@ st.markdown(
             <th style="text-align:left;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
                        font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">Chip</th>
             <th style="text-align:right;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
-                       font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">TFLOP/s bf16</th>
+                       font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">FLOP/s bf16</th>
             <th style="text-align:right;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
-                       font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">TFLOP/s @ {prec_choice}</th>
+                       font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">FLOP/s @ {prec_choice}</th>
             <th style="text-align:right;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
-                       font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">TB/s</th>
+                       font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">bytes/s</th>
             <th style="text-align:right;padding:0 10px 8px;font-family:'IBM Plex Sans Condensed',sans-serif;
                        font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:{INK_SOFT}">Ridge</th>
           </tr>

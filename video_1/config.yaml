@@ -1,20 +1,25 @@
 # Arithmetic intensity calculator — accelerator & precision config
 # Peak compute is dense (no sparsity). Ridge point = peak / bandwidth (FLOP/byte).
-# peak_bf16_tflops is the baseline; the actual peak used in-app is
-# peak_bf16_tflops * precisions[i].compute_multiplier for the selected dtype.
+# Figures are stored in raw units (FLOP/s, bytes/s) using explicit scientific
+# notation with a signed exponent (e.g. 9.89e+14) — PyYAML's legacy resolver
+# does NOT parse bare-exponent floats like "9.89e14" as numbers (silently loads
+# them as strings instead), so the "+" after "e" is required, not cosmetic.
+# peak_bf16_flops is the baseline; the actual peak used in-app is
+# peak_bf16_flops * precisions[i].compute_multiplier for the selected dtype.
 #
 # Verified 2026-07-25 against vendor datasheets (dense/no-sparsity figures):
-#   H100 SXM : 989 TFLOPS BF16, 1979 TFLOPS FP8, 3.35 TB/s     — official NVIDIA H100
-#              datasheet PDF, fetched and cross-checked directly (BF16 1,979 TFLOPS*
-#              and FP8 3,958 TFLOPS* are the *with-sparsity* column; datasheet states
-#              "Specifications 1/2 lower without sparsity" -> 989 / 1979 dense). Also
-#              confirms TF32 (fp32-equivalent) dense = 494.5 TFLOPS = exactly 0.5x BF16.
-#   H200 SXM : same GH100 die/compute as H100 (989 BF16), 4.8 TB/s — NVIDIA H200 product page
-#   A100 80GB: 312 TFLOPS BF16, 624 TOPS INT8, 2.039 TB/s      — NVIDIA A100 80GB datasheet
-#   B200     : 2250 TFLOPS BF16, 4500 TFLOPS FP8, ~8 TB/s      — NVIDIA Blackwell B200 datasheet
+#   H100 SXM : 9.89e+14 FLOP/s BF16, 1.979e+15 FLOP/s FP8, 3.35e+12 B/s — official
+#              NVIDIA H100 datasheet PDF, fetched and cross-checked directly (BF16
+#              1,979 TFLOPS* and FP8 3,958 TFLOPS* are the *with-sparsity* column;
+#              datasheet states "Specifications 1/2 lower without sparsity" -> 989 /
+#              1979 TFLOPS dense). Also confirms TF32 (fp32-equivalent) dense =
+#              494.5 TFLOPS = exactly 0.5x BF16.
+#   H200 SXM : same GH100 die/compute as H100 (9.89e+14 BF16), 4.8e+12 B/s — NVIDIA H200 product page
+#   A100 80GB: 3.12e+14 FLOP/s BF16, 6.24e+14 OP/s INT8, 2.039e+12 B/s — NVIDIA A100 80GB datasheet
+#   B200     : 2.25e+15 FLOP/s BF16, 4.5e+15 FLOP/s FP8, ~8e+12 B/s   — NVIDIA Blackwell B200 datasheet
 #              (bandwidth reported as 7.7-8 TB/s across sources depending on 180GB/192GB SKU)
-#   TPU v5e  : 197 TFLOPS BF16, 393 TOPS INT8, 0.819 TB/s      — Google Cloud TPU v5e docs
-#   TPU v6e  : 918 TFLOPS BF16, 1836 TOPS INT8, 1.64 TB/s      — Google Cloud TPU v6e (Trillium) docs
+#   TPU v5e  : 1.97e+14 FLOP/s BF16, 3.93e+14 OP/s INT8, 8.19e+11 B/s — Google Cloud TPU v5e docs
+#   TPU v6e  : 9.18e+14 FLOP/s BF16, 1.836e+15 OP/s INT8, 1.64e+12 B/s — Google Cloud TPU v6e (Trillium) docs
 # fp8/int8 = ~2x bf16 dense peak holds exactly across every chip above.
 # fp32 compute_multiplier of 0.5x is directly confirmed on H100 (TF32 dense is exactly
 # half of BF16 dense per the official datasheet); used here as a general approximation
@@ -23,23 +28,23 @@
 
 accelerators:
   - name: "H100 SXM"
-    peak_bf16_tflops: 989
-    bandwidth_tbs: 3.35
+    peak_bf16_flops: 9.89e+14
+    bandwidth_bytes_s: 3.35e+12
   - name: "H200 SXM"
-    peak_bf16_tflops: 989
-    bandwidth_tbs: 4.8
+    peak_bf16_flops: 9.89e+14
+    bandwidth_bytes_s: 4.8e+12
   - name: "A100 80GB"
-    peak_bf16_tflops: 312
-    bandwidth_tbs: 2.039
+    peak_bf16_flops: 3.12e+14
+    bandwidth_bytes_s: 2.039e+12
   - name: "B200"
-    peak_bf16_tflops: 2250
-    bandwidth_tbs: 8.0
+    peak_bf16_flops: 2.25e+15
+    bandwidth_bytes_s: 8.0e+12
   - name: "TPU v5e"
-    peak_bf16_tflops: 197
-    bandwidth_tbs: 0.819
+    peak_bf16_flops: 1.97e+14
+    bandwidth_bytes_s: 8.19e+11
   - name: "TPU v6e"
-    peak_bf16_tflops: 918
-    bandwidth_tbs: 1.64
+    peak_bf16_flops: 9.18e+14
+    bandwidth_bytes_s: 1.64e+12
 
 precisions:
   - name: "fp32"
