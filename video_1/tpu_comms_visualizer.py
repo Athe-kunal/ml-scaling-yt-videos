@@ -131,6 +131,11 @@ def stepper(label, min_v, max_v, default, step, key):
     nkey = f"{key}_num"
     if nkey not in st.session_state:
         st.session_state[nkey] = default
+    else:
+        # number_input's min/max aren't enforced on typed/pasted values — clamp
+        # explicitly, and do it before the widget is instantiated below (Streamlit
+        # forbids writing to a widget's session_state key after that point).
+        st.session_state[nkey] = min(max(st.session_state[nkey], min_v), max_v)
 
     def _dec():
         st.session_state[nkey] = max(min_v, st.session_state[nkey] - step)

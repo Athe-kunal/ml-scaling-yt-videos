@@ -79,11 +79,11 @@ defaults:
 
 matmul_shape:
   b_slider_min: 5
-  b_slider_max: 131072
+  b_slider_max: 200000
   b_slider_step: 5
   d_slider_min: 32
-  d_slider_max: 32768
+  d_slider_max: 200000
   d_slider_step: 32
   f_slider_min: 128
-  f_slider_max: 131072
+  f_slider_max: 200000
   f_slider_step: 128

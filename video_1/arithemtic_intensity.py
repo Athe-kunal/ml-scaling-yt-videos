@@ -177,6 +177,11 @@ def stepper(label, min_v, max_v, default, step, key):
     nkey = f"{key}_num"
     if nkey not in st.session_state:
         st.session_state[nkey] = default
+    else:
+        # number_input's min/max aren't enforced on typed/pasted values — clamp
+        # explicitly, and do it before the widget is instantiated below (Streamlit
+        # forbids writing to a widget's session_state key after that point).
+        st.session_state[nkey] = min(max(st.session_state[nkey], min_v), max_v)
 
     def _dec():
         st.session_state[nkey] = max(min_v, st.session_state[nkey] - step)
@@ -256,8 +261,14 @@ with st.sidebar:
     acc_choice = st.selectbox("Preset", acc_names, index=DEFAULTS["accelerator_index"])
 
     if acc_choice == "Custom…":
-        peak_flops = st.number_input("Peak compute — FLOP/s", min_value=1e9, value=9.89e14,
-                                      step=1e12, format="%.3e")
+        peak_bf16_custom = st.number_input(
+            "Peak compute (bf16 baseline) — FLOP/s", min_value=1e9, value=9.89e14,
+            step=1e12, format="%.3e",
+            help="Enter the chip's dense bf16 peak. It auto-scales with the precision "
+                 "picker below, same as the presets.",
+        )
+        peak_flops = peak_bf16_custom * compute_mult
+        st.caption(f"Effective peak at {prec_choice}: **{fmt_sci(peak_flops)} FLOP/s**")
         bw_bytes = st.number_input("Memory bandwidth — bytes/s", min_value=1e7, value=3.35e12,
                                     step=1e10, format="%.3e")
     else:
@@ -273,6 +284,21 @@ with st.sidebar:
     st.markdown(
         f"<p class='spec-note'>Peak compute auto-scales with precision from each chip's bf16 "
         f"baseline (int8/fp8 ≈2× denser, fp32 ≈0.5×). Edit the number above to override.</p>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="grp-h">Timing model</div>', unsafe_allow_html=True)
+    overlap_mode = st.radio(
+        "How compute and HBM traffic combine",
+        ["Overlapping — max(Tmath, Tmem)", "Non-overlapping — Tmath + Tmem"],
+        index=0, label_visibility="collapsed",
+    )
+    overlapping = overlap_mode.startswith("Overlapping")
+    st.markdown(
+        "<p class='spec-note'>Overlapping is the standard roofline assumption — the chip "
+        "streams weights/activations while it computes, so the slower of the two dominates. "
+        "Non-overlapping models a kernel that can't hide HBM traffic behind compute (e.g. a "
+        "hard sync point) — compute and memory time simply add up.</p>",
         unsafe_allow_html=True,
     )
 
@@ -300,7 +326,12 @@ with tab_matmul:
     Bs = (ridge * s_bytes * D * F) / den2 if den2 > 0 else float("inf")
 
     I_cur = intensity(B, D, F, s_bytes)
-    achieved = min(peak_flops, bw_bytes * I_cur)
+    flops_cur = 2 * B * D * F
+    bytes_cur = s_bytes * (B * D + D * F + B * F)
+    Tmath = flops_cur / peak_flops
+    Tmem = bytes_cur / bw_bytes
+    Ttotal = max(Tmath, Tmem) if overlapping else Tmath + Tmem
+    achieved = flops_cur / Ttotal
     util = achieved / peak_flops
 
     # -------------------------------------------------------------- plot ---
@@ -392,6 +423,11 @@ with tab_matmul:
         )
         st.markdown(f'<div class="verdict-box"><b>Verdict</b> · {verdict}</div>', unsafe_allow_html=True)
 
+    t1, t2, t3 = st.columns(3)
+    t1.metric("Tmath", fmt_time(Tmath))
+    t2.metric("Tmem", fmt_time(Tmem))
+    t3.metric("Ttotal", fmt_time(Ttotal), "overlapping" if overlapping else "non-overlapping")
+
 with tab_dot:
     st.markdown(
         f'<p class="hero-shape">FLOPs = 2·D − 1 ≈ 2·D&nbsp;&nbsp;/&nbsp;&nbsp;bytes = s·2·D'
@@ -404,7 +440,8 @@ with tab_dot:
 
     Tcompute_dot = 2 * D_dot / peak_flops
     Tmem_dot = (s_bytes * 2 * D_dot) / bw_bytes
-    achieved_dot = min(peak_flops, bw_bytes * I_dot)
+    Ttotal_dot = max(Tcompute_dot, Tmem_dot) if overlapping else Tcompute_dot + Tmem_dot
+    achieved_dot = (2 * D_dot) / Ttotal_dot
     util_dot = achieved_dot / peak_flops
     dot_compute_bound = I_dot >= ridge
 
@@ -456,11 +493,12 @@ with tab_dot:
 
     st.plotly_chart(fig_dot, use_container_width=True)
 
-    d1, d2, d3, d4 = st.columns(4)
+    d1, d2, d3, d4, d5 = st.columns(5)
     d1.metric("Intensity", f"{fmt(I_dot)}", "FLOP/byte")
     d2.metric("Ridge point", f"{fmt(ridge)}", "FLOP/byte")
     d3.metric("Tcompute", fmt_time(Tcompute_dot))
     d4.metric("Tmem", fmt_time(Tmem_dot))
+    d5.metric("Ttotal", fmt_time(Ttotal_dot), "overlapping" if overlapping else "non-overlapping")
 
     dot_verdict = (
         f"Compute-bound — intensity is {fmt(I_dot/ridge)}× the ridge"
