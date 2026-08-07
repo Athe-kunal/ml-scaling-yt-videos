@@ -120,13 +120,6 @@ st.markdown(
     'them across real devices.</p>',
     unsafe_allow_html=True,
 )
-st.markdown(
-    '<div class="case-box"><b>Short answer to "concat or reduce?"</b> — neither, exactly. Each token\'s '
-    "final output is a <b>scatter</b> back to its original sequence position, combined across its chosen "
-    "experts with a <b>gate-weighted sum</b>. Concatenation isn't even an option: every expert's MLP outputs "
-    "the same d_model width as the input, precisely so the outputs <i>can</i> be summed into one vector.</div>",
-    unsafe_allow_html=True,
-)
 
 # --------------------------------------------------------------- helpers ---
 def chunk_color(k, n):
@@ -149,6 +142,27 @@ def color_legend(colors, prefix, note=""):
     st.markdown(
         f'<div style="font-family:\'IBM Plex Mono\',monospace; font-size:11.5px; '
         f'margin: 10px 0 2px; display:flex; flex-wrap:wrap; align-items:center;">{swatches}{note_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def stage_breadcrumb(stage_labels, transfer_stages, current_stage):
+    parts = []
+    for i, label in enumerate(stage_labels):
+        active = i == current_stage
+        bg = f"background:{ACCENT}; color:#08131A;" if active else f"background:{CARD_BG}; color:{INK_SOFT};"
+        tag = ' <span style="opacity:0.85;">⇄</span>' if i in transfer_stages else ""
+        parts.append(
+            f'<span style="{bg} font-weight:600; padding:5px 12px; border-radius:999px; '
+            f'border:1px solid {ACCENT if active else RULE};">{label}{tag}</span>'
+        )
+        if i < len(stage_labels) - 1:
+            parts.append(f'<span style="color:{RULE}; padding:0 4px;">&rarr;</span>')
+    st.markdown(
+        f'<div style="font-family:\'IBM Plex Mono\',monospace; font-size:12px; '
+        f'display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin: 4px 0 14px;">{"".join(parts)}</div>'
+        f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:10.5px; color:{INK_SOFT}; margin:-8px 0 12px;">'
+        f'&#9432; ⇄ marks a stage that needs AllToAll communication.</p>',
         unsafe_allow_html=True,
     )
 
@@ -581,7 +595,11 @@ with tab2:
                                "before dropping the combined result back into its original sequence position.")
 
     steps_p2 = [
-        dict(title="Initial — tokens sharded by sequence, experts sharded by device", comm=None,
+        dict(title="Router — token &rarr; expert assignment", comm=None,
+             desc="Same computation as the MoE tab: each token locally computes gate scores over all experts "
+                  "and keeps its top-{}. This is purely local — nothing has moved between devices yet, it's "
+                  "just a decision about where things <i>will</i> go.".format(top_k2)),
+        dict(title="Placed on devices — tokens sharded by sequence, experts sharded by device", comm=None,
              desc="Every device holds a contiguous slice of the token sequence (its data-parallel shard) and "
                   "owns exactly one expert. A token's chip is filled with its <b>home device</b>'s color and "
                   "outlined in its assigned expert's color(s)" +
@@ -596,22 +614,34 @@ with tab2:
                   "reverse shuffle of the dispatch step."),
         dict(title="Local combine — weighted sum, restore order", comm=None, desc=combine_local_desc),
     ]
+
+    STAGE_LABELS = ["Router", "Dispatch", "Expert MLP", "Combine"]
+    STAGE_FOR_STEP = [0, 0, 1, 2, 3, 3]
+    TRANSFER_STAGES = {1, 3}
+
     step_p2 = step_nav("p2_step", len(steps_p2))
+    stage_breadcrumb(STAGE_LABELS, TRANSFER_STAGES, STAGE_FOR_STEP[step_p2])
     s = steps_p2[step_p2]
     st.markdown(f'<div class="step-desc">{comm_tag(s["comm"])}<br><b>{s["title"]}</b><br>{s["desc"]}</div>', unsafe_allow_html=True)
 
     color_legend(device_colors, "device ", "= Expert N, since device N owns Expert N")
-    chip_key = {
-        0: "chip fill = home device (this panel) &nbsp;|&nbsp; tab/border color(s) = assigned expert device(s), i.e. where it's headed",
-        1: "chip fill = origin device (where it came from) &nbsp;|&nbsp; border = this panel's device (where it just arrived)",
-        2: "chip fill = this panel's device (currently computing) &nbsp;|&nbsp; no border — purely local, nothing to relate to",
-        3: "chip fill = expert device that produced this result &nbsp;|&nbsp; border = this panel's device (home, already arrived)",
-        4: "solid accent fill = final combined result, back in its original sequence position",
-    }[step_p2]
-    st.markdown(
-        f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:11px; color:{INK_SOFT}; margin:0 0 8px;">{chip_key}</p>',
-        unsafe_allow_html=True,
-    )
-    fig_p2 = render_device_grid(step_p2, n_devices, tokens_per_device, origin, routing2, device_colors, ncols2)
+
+    if step_p2 == 0:
+        fig_p2 = render_routing_step(0, routing2, n_devices, device_colors, top_k2)
+    else:
+        device_step = step_p2 - 1
+        chip_key = {
+            0: "chip fill = home device (this panel) &nbsp;|&nbsp; tab/border color(s) = assigned expert device(s), i.e. where it's headed",
+            1: "chip fill = origin device (where it came from) &nbsp;|&nbsp; border = this panel's device (where it just arrived)",
+            2: "chip fill = this panel's device (currently computing) &nbsp;|&nbsp; no border — purely local, nothing to relate to",
+            3: "chip fill = expert device that produced this result &nbsp;|&nbsp; border = this panel's device (home, already arrived)",
+            4: "solid accent fill = final combined result, back in its original sequence position",
+        }[device_step]
+        st.markdown(
+            f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:11px; color:{INK_SOFT}; margin:0 0 8px;">{chip_key}</p>',
+            unsafe_allow_html=True,
+        )
+        fig_p2 = render_device_grid(device_step, n_devices, tokens_per_device, origin, routing2, device_colors, ncols2)
+
     st.pyplot(fig_p2, use_container_width=True)
     plt.close(fig_p2)
