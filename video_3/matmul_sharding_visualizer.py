@@ -409,31 +409,70 @@ with tab1:
 with tab2:
     st.markdown(
         '<div class="case-box"><b>A[I, J_x] &middot; B[J, K] &rarr; C[I, K]</b> — A is sharded on the contracting '
-        "dimension J, B is fully replicated. Fix it with an AllGather on A <i>before</i> the matmul.</div>",
+        "dimension J, B is fully replicated. The book gives two valid strategies here.</div>",
         unsafe_allow_html=True,
     )
-    n2 = st.slider("Number of devices (mesh axis x)", 2, 8, 4, key="c2_n")
+    c1, c2 = st.columns(2)
+    with c1:
+        n2 = st.slider("Number of devices (mesh axis x)", 2, 8, 4, key="c2_n")
+    with c2:
+        use_allreduce2 = st.checkbox(
+            "Alt strategy: local matmul + AllReduce (usually higher cost than AllGather-first)",
+            key="c2_alt",
+        )
 
-    steps2 = [
-        dict(title="Initial sharding",
-             desc="A[I, J_x] — each device holds only one chunk of the contracting dimension J. "
-                  "B[J, K] is fully replicated: every device already has the whole thing.",
-             comm=None),
-        dict(title="AllGather (before matmul)",
-             desc="<b>AllGather_x A[I, J_x] &rarr; A[I, J]</b> — every device exchanges its J-chunk with all "
-                  "the others over ICI, so each one ends up holding the full A matrix.",
-             comm="AllGather"),
-        dict(title="Local matmul",
-             desc="Now that every device holds the full A[I,J] and B[J,K], each computes the identical, "
-                  "full result locally: <b>C[I, K] = A[I,J] · B[J,K]</b>. The output is fully replicated.",
-             comm=None),
-    ]
+    if not use_allreduce2:
+        steps2 = [
+            dict(title="Initial sharding",
+                 desc="A[I, J_x] — each device holds only one chunk of the contracting dimension J. "
+                      "B[J, K] is fully replicated: every device already has the whole thing.",
+                 comm=None),
+            dict(title="AllGather (before matmul)",
+                 desc="<b>AllGather_x A[I, J_x] &rarr; A[I, J]</b> — every device exchanges its J-chunk with all "
+                      "the others over ICI, so each one ends up holding the full A matrix.",
+                 comm="AllGather"),
+            dict(title="Local matmul",
+                 desc="Now that every device holds the full A[I,J] and B[J,K], each computes the identical, "
+                      "full result locally: <b>C[I, K] = A[I,J] · B[J,K]</b>. The output is fully replicated.",
+                 comm=None),
+        ]
+    else:
+        steps2 = [
+            dict(title="Initial sharding",
+                 desc="A[I, J_x] — each device holds only one chunk of the contracting dimension J. "
+                      "B[J, K] is fully replicated: every device already has the whole thing.",
+                 comm=None),
+            dict(title="Local matmul — partial sums",
+                 desc="No AllGather this time — each device just multiplies its own J-chunk of A against the "
+                      "matching J-slice of its (already-local) full copy of B: <b>A[I,J_x] · B[J_x,K] &rarr; "
+                      "C[I,K]{U_x}</b>. Same shape as the final answer, but incomplete — a partial sum.",
+                 comm=None),
+            dict(title="AllReduce (sum across devices)",
+                 desc="<b>AllReduce_x C[I,K]{U_x} &rarr; C[I,K]</b> — sum the partial results across every "
+                      "device. The book notes this is a valid alternative to AllGather-then-matmul, but "
+                      "<b>typically costs more</b>: it moves 2× the (smaller) output C instead of 1× the "
+                      "(often larger) operand A.",
+                 comm="AllReduce"),
+        ]
     step2 = step_nav("c2_step", len(steps2))
     s = steps2[step2]
     st.markdown(f'<div class="step-desc">{comm_tag(s["comm"])}<br><b>{s["title"]}</b><br>{s["desc"]}</div>', unsafe_allow_html=True)
 
-    a_state = "ghost_chunked" if step2 == 0 else "full_gathered"
-    c_state = "empty" if step2 < 2 else "final_full"
+    if use_allreduce2 and step2 == 1:
+        st.markdown(
+            f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:12px; color:{INK_SOFT}; margin:12px 0 -4px;">'
+            "How the multiplication actually works, per J-value in the chunk:</p>",
+            unsafe_allow_html=True,
+        )
+        st.pyplot(render_outer_product_explainer(), use_container_width=True)
+
+    if not use_allreduce2:
+        a_state = "ghost_chunked" if step2 == 0 else "full_gathered"
+        c_state = "empty" if step2 < 2 else "final_full"
+    else:
+        a_state = "ghost_chunked"
+        c_state = "empty" if step2 == 0 else ("partial" if step2 == 1 else "final_full")
+
     panels = {}
     ncols = min(n2, 4)
     for k in range(n2):
