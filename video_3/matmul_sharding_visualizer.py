@@ -101,6 +101,14 @@ st.markdown(
         box-shadow: inset 0 -2px 0 {ACCENT};
     }}
     div[data-testid="stImage"] img {{ border-radius: 16px; }}
+
+    .eq-box {{
+        margin-top: 12px; padding: 14px 20px; border-radius: 14px; border: 1px solid {RULE};
+        background: linear-gradient(180deg, {PANEL_BG}, {CARD_BG});
+        box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 10px 28px -14px {SHADOW};
+    }}
+    .eq-box .katex {{ color: {INK} !important; font-size: 1.08em; }}
+    .eq-box [data-testid="stElementContainer"] {{ margin-bottom: 0 !important; }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -344,6 +352,14 @@ def render_grid(panels_by_pos, nrows, ncols, panel_w_in=3.2, panel_h_in=2.3):
     return fig
 
 
+def render_equations(lines):
+    """Stacked, centered LaTeX equations — mirrors the book's own equation blocks."""
+    st.markdown('<div class="eq-box">', unsafe_allow_html=True)
+    latex = r"\begin{aligned}" + r"\\[4pt] ".join(lines) + r"\end{aligned}"
+    st.latex(latex)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def comm_tag(comm):
     if comm is None:
         return '<span class="comm-tag comm-none">no communication</span>'
@@ -367,6 +383,12 @@ with tab1:
         "dimension) is unsharded on both operands, so the computation is valid and needs no communication at all.</div>",
         unsafe_allow_html=True,
     )
+    render_equations([
+        r"\mathbf{A}[I,J]\cdot\mathbf{B}[J,K]\rightarrow\mathbf{C}[I,K]",
+        r"\mathbf{A}[I_X,J]\cdot\mathbf{B}[J,K]\rightarrow\mathbf{C}[I_X,K]",
+        r"\mathbf{A}[I,J]\cdot\mathbf{B}[J,K_Y]\rightarrow\mathbf{C}[I,K_Y]",
+        r"\mathbf{A}[I_X,J]\cdot\mathbf{B}[J,K_Y]\rightarrow\mathbf{C}[I_X,K_Y]",
+    ])
     c1, c2 = st.columns(2)
     with c1:
         x_size = st.slider("Devices along mesh axis x (shards I)", 1, 4, 2, key="c1_x")
@@ -420,6 +442,19 @@ with tab2:
             "Alt strategy: local matmul + AllReduce (usually higher cost than AllGather-first)",
             key="c2_alt",
         )
+
+    if not use_allreduce2:
+        render_equations([
+            r"\mathbf{A}[I,J_X]\cdot\mathbf{B}[J,K]\rightarrow\mathbf{C}[I,K]",
+            r"\text{AllGather}_X\ \mathbf{A}[I,J_X]\rightarrow\mathbf{A}[I,J]",
+            r"\mathbf{A}[I,J]\cdot\mathbf{B}[J,K]\rightarrow\mathbf{C}[I,K]",
+        ])
+    else:
+        render_equations([
+            r"\mathbf{A}[I,J_X]\cdot\mathbf{B}[J,K]\rightarrow\mathbf{C}[I,K]",
+            r"\mathbf{A}[I,J_X]\cdot_{\text{local}}\mathbf{B}[J_X,K]\rightarrow\mathbf{C}[I,K]\{U_X\}",
+            r"\text{AllReduce}_X\ \mathbf{C}[I,K]\{U_X\}\rightarrow\mathbf{C}[I,K]",
+        ])
 
     if not use_allreduce2:
         steps2 = [
@@ -498,6 +533,12 @@ with tab3:
     with c2:
         use_rs = st.checkbox("Use ReduceScatter instead of AllReduce (sharded output)", key="c3_rs")
 
+    render_equations([
+        r"\mathbf{A}[I,J_X]\cdot_{\text{local}}\mathbf{B}[J_X,K]\rightarrow\mathbf{C}[I,K]\{U_X\}",
+        (r"\text{ReduceScatter}_X\ \mathbf{C}[I,K]\{U_X\}\rightarrow\mathbf{C}[I,K_X]" if use_rs
+         else r"\text{AllReduce}_X\ \mathbf{C}[I,K]\{U_X\}\rightarrow\mathbf{C}[I,K]"),
+    ])
+
     steps3 = [
         dict(title="Initial sharding",
              desc="A[I, J_x] and B[J_x, K] are both sharded along the same contracting dimension J, on the same mesh axis x.",
@@ -563,6 +604,19 @@ with tab4:
         n4 = st.slider("Number of devices (mesh axis x)", 2, 8, 4, key="c4_n")
     with c2:
         gather_choice = st.radio("Which operand do we AllGather to resolve it?", ["A", "B"], horizontal=True, key="c4_choice")
+
+    if gather_choice == "A":
+        render_equations([
+            r"\mathbf{A}[I_X,J]\cdot\mathbf{B}[J,K_X]\rightarrow\mathbf{C}[I_X,K_X]\quad\text{(invalid)}",
+            r"\text{AllGather}_X\ \mathbf{A}[I_X,J]\rightarrow\mathbf{A}[I,J]",
+            r"\mathbf{A}[I,J]\cdot\mathbf{B}[J,K_X]\rightarrow\mathbf{C}[I,K_X]",
+        ])
+    else:
+        render_equations([
+            r"\mathbf{A}[I_X,J]\cdot\mathbf{B}[J,K_X]\rightarrow\mathbf{C}[I_X,K_X]\quad\text{(invalid)}",
+            r"\text{AllGather}_X\ \mathbf{B}[J,K_X]\rightarrow\mathbf{B}[J,K]",
+            r"\mathbf{A}[I_X,J]\cdot\mathbf{B}[J,K]\rightarrow\mathbf{C}[I_X,K]",
+        ])
 
     if gather_choice == "A":
         step2_desc = "<b>AllGather_x A[I_x, J] &rarr; A[I, J]</b> — every device gathers the missing row-chunks of A, so it now holds the full matrix. B stays sharded on K."
