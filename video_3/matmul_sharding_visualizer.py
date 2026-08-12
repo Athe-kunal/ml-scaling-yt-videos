@@ -187,6 +187,22 @@ def draw_block(ax, x0, y0, w, h, spec, title):
             ax.text(x0 + w / 2, y0 + h / 2, f"{shape}\nreplicated", ha="center", va="center",
                     color=INK_SOFT, fontsize=7.8, fontfamily="monospace")
 
+    elif state == "replicated_slice":
+        # Whole matrix is present (replicated) — draw it as ONE solid block, not chunk
+        # tiles — and just lighten the portion actually used by this local matmul.
+        axis, n, idx = spec["axis"], spec["n_chunks"], spec["chunk_idx"]
+        border = spec.get("border_axis", AXIS_COLOR["x"])
+        rrect(ax, x0, y0, w, h, facecolor="#3A4B63", alpha=0.55, edgecolor="none", zorder=2)
+        fillc = chunk_color(idx, n)
+        if axis == "col":
+            bw = w / n
+            bx, by, bw2, bh2 = x0 + idx * bw, y0, bw, h
+        else:
+            bh = h / n
+            bx, by, bw2, bh2 = x0, y0 + (n - 1 - idx) * bh, w, bh
+        rrect(ax, bx, by, bw2, bh2, r=0.03, facecolor=fillc, alpha=0.95,
+              edgecolor=border, linewidth=2.0, zorder=3, shadow=True)
+
     elif state == "partial":
         rrect(ax, x0, y0, w, h, facecolor=COMM_COLOR, alpha=0.20, edgecolor=COMM_COLOR,
               linewidth=1.6, hatch="////", zorder=2, shadow=True)
@@ -504,16 +520,25 @@ with tab2:
     if not use_allreduce2:
         a_state = "ghost_chunked" if step2 == 0 else "full_gathered"
         c_state = "empty" if step2 < 2 else "final_full"
+        b_state = "full_replicated"
     else:
         a_state = "ghost_chunked"
         c_state = "empty" if step2 == 0 else ("partial" if step2 == 1 else "final_full")
+        # step 1 (local matmul): B is still fully present (replicated) on every device —
+        # keep it drawn as one whole block, just lighten the J_x slice that's actually used.
+        b_state = "replicated_slice" if step2 == 1 else "full_replicated"
 
     panels = {}
     ncols = min(n2, 4)
     for k in range(n2):
+        b_spec = (
+            dict(state="replicated_slice", axis="row", n_chunks=n2, chunk_idx=k, border_axis=AXIS_COLOR["x"], shape="J × K")
+            if b_state == "replicated_slice"
+            else dict(state="full_replicated", shape="J × K")
+        )
         specs = {
             "A": dict(state=a_state, axis="col", n_chunks=n2, chunk_idx=k, border_axis=AXIS_COLOR["x"]),
-            "B": dict(state="full_replicated", shape="J × K"),
+            "B": b_spec,
             "C": dict(state=c_state, shape="I × K"),
         }
         panels[divmod(k, ncols)] = (specs, f"device {k}")

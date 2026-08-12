@@ -182,6 +182,68 @@ def render_mesh(x_size, y_size):
     return fig_m
 
 
+# ------------------------------------------------------------ data axes ---
+def chunk_boundaries(n_items, shard_set, x_size, y_size):
+    """Row/col cut positions implied by a shard set, matching axis_slice's chunking."""
+    if shard_set == {"x", "y"}:
+        n_chunks = x_size * y_size
+    elif shard_set == {"x"}:
+        n_chunks = x_size
+    elif shard_set == {"y"}:
+        n_chunks = y_size
+    else:
+        n_chunks = 1
+    chunks = np.array_split(np.arange(n_items), n_chunks)
+    return np.cumsum([len(c) for c in chunks])[:-1]
+
+
+def render_data_axes(R, C, shard_I, shard_J, x_size, y_size):
+    """The logical (I, J) tensor on its own — the data-side counterpart to the
+    physical device mesh: same cell colors as the per-device panels, with colored
+    cut-lines showing where each mesh axis slices the data."""
+    fig_d, ax_d = plt.subplots(figsize=(C * 0.5 + 0.9, R * 0.5 + 0.9), facecolor=BG)
+    ax_d.set_facecolor(BG)
+
+    panel = FancyBboxPatch(
+        (-0.06, -0.06), C + 0.12, R + 0.12,
+        boxstyle="round,pad=0,rounding_size=0.12",
+        linewidth=0, facecolor=DEVICE_BG, zorder=0,
+    )
+    ax_d.add_patch(panel)
+
+    for i in range(R):
+        for j in range(C):
+            color = cell_color(i, j, R, C)
+            ax_d.add_patch(Rectangle((j, i), 1, 1, facecolor=color, alpha=0.85, edgecolor=BG, linewidth=1.5, zorder=1))
+
+    row_edge, col_edge = edge_color(shard_I), edge_color(shard_J)
+    if row_edge:
+        for rc in chunk_boundaries(R, shard_I, x_size, y_size):
+            ax_d.plot([0, C], [rc, rc], color=row_edge, linewidth=3, zorder=3, solid_capstyle="round")
+    if col_edge:
+        for cc in chunk_boundaries(C, shard_J, x_size, y_size):
+            ax_d.plot([cc, cc], [0, R], color=col_edge, linewidth=3, zorder=3, solid_capstyle="round")
+
+    ax_d.annotate("", xy=(C + 0.15, 0), xytext=(C + 0.15, R),
+                  arrowprops=dict(arrowstyle="<-", color=INK_SOFT, lw=1.6))
+    ax_d.text(C + 0.32, R / 2, "I axis", color=INK_SOFT, fontsize=9, va="center", ha="left",
+               rotation=-90, fontfamily="monospace")
+    ax_d.annotate("", xy=(C, R + 0.15), xytext=(0, R + 0.15),
+                  arrowprops=dict(arrowstyle="->", color=INK_SOFT, lw=1.6))
+    ax_d.text(C / 2, R + 0.32, "J axis", color=INK_SOFT, fontsize=9, ha="center", fontfamily="monospace")
+
+    ax_d.set_xlim(-0.1, C + 0.75)
+    ax_d.set_ylim(R + 0.55, -0.1)
+    ax_d.set_aspect("equal")
+    ax_d.set_xticks([])
+    ax_d.set_yticks([])
+    for spine in ax_d.spines.values():
+        spine.set_visible(False)
+    ax_d.set_title("logical data axes (I, J)", fontsize=10, color=INK_SOFT, fontfamily="monospace", pad=8)
+    fig_d.tight_layout()
+    return fig_d
+
+
 # --------------------------------------------------------------- figure ---
 cell = 0.5
 pad_between = 0.55
@@ -246,16 +308,20 @@ for dx in range(x_size):
 
 fig.tight_layout()
 
-col_mesh, col_devices = st.columns([1, 4])
+col_mesh, col_data, col_devices = st.columns([1, 1, 4])
 with col_mesh:
     st.pyplot(render_mesh(x_size, y_size), use_container_width=True)
+with col_data:
+    st.pyplot(render_data_axes(R, C, shard_I, shard_J, x_size, y_size), use_container_width=True)
 with col_devices:
     st.pyplot(fig, use_container_width=True)
 
 st.markdown(
     f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:12px; color:{INK_SOFT};">'
-    "The mesh on the left is the physical layout of devices along axes x and y; each cell in it "
-    "corresponds one-to-one to a panel on the right, at the same (x, y) coordinate. "
+    "The mesh on the far left is the physical layout of devices along axes x and y. Next to it, the "
+    "logical data axes (I, J) show the tensor on its own, with colored cut-lines marking where each "
+    "mesh axis slices it — same colors as the per-device borders on the right. Each device panel "
+    "corresponds one-to-one to a mesh cell, at the same (x, y) coordinate. "
     "A subscript on a dimension splits it across that mesh axis; devices that differ only along an "
     "axis <i>not</i> in the subscript hold identical (replicated) data. The colored border on each "
     "device panel marks which mesh axis produced that cut.</p>",
