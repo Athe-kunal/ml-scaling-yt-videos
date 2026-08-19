@@ -752,7 +752,12 @@ with tab8:
                 unsafe_allow_html=True,
             )
 
-    st.markdown("#### Benchmark template")
+    st.markdown("#### Benchmark template — all 4 primitives")
+    st.markdown(
+        f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:12px; color:{INK_SOFT};">'
+        "Same shared mesh/array setup, one function per primitive, each benchmarked the same way.</p>",
+        unsafe_allow_html=True,
+    )
     st.code(
         '''import jax, jax.numpy as jnp
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
@@ -761,21 +766,87 @@ import numpy as np, time
 mesh = Mesh(np.array(jax.devices()).reshape(4, 4), ("x", "y"))
 x = jax.device_put(jnp.ones((8192, 8192)), NamedSharding(mesh, P("x", None)))
 
+
+# --- AllGather: V[i] (sharded) -> V (full, on every device) ----------------
 @jax.jit
 def all_gather(x):
     return jax.lax.all_gather(x, "x", axis=0, tiled=True)
 
-with mesh:
-    y = jax.jit(all_gather, in_shardings=NamedSharding(mesh, P("x", None)))(x)
+
+# --- AllReduce: V[i] (local) -> sum(V) (full, on every device) -------------
+@jax.jit
+def all_reduce(x):
+    return jax.lax.psum(x, "x")
+
+
+# --- ReduceScatter: V[i] (full per device, unreduced) -> sum(V)[i] (shard) -
+@jax.jit
+def reduce_scatter(x):
+    return jax.lax.psum_scatter(x, "x", scatter_dimension=0, tiled=True)
+
+
+# --- AllToAll: V[i][j] -> V[j][i] (transpose the sharded axis) -------------
+@jax.jit
+def all_to_all(x):
+    return jax.lax.all_to_all(x, "x", split_axis=1, concat_axis=0, tiled=True)
+
+
+def bench(fn, name, n_iter=20):
+    f = jax.jit(fn, in_shardings=NamedSharding(mesh, P("x", None)))
+    y = f(x)
     y.block_until_ready()
     t0 = time.perf_counter()
-    for _ in range(20):
-        y = all_gather(x)
+    for _ in range(n_iter):
+        y = f(x)
     y.block_until_ready()
-    print((time.perf_counter() - t0) / 20, "s / call")
-# Swap all_gather's body for jax.lax.psum(x, "x"), jax.lax.psum_scatter(x, "x"),
-# or jax.lax.all_to_all(x, "x", split_axis=0, concat_axis=1) to benchmark the others.''',
+    print(f"{name}: {(time.perf_counter() - t0) / n_iter * 1e3:.3f} ms/call")
+
+
+with mesh:
+    bench(all_gather, "AllGather")
+    bench(all_reduce, "AllReduce")
+    bench(reduce_scatter, "ReduceScatter")
+    bench(all_to_all, "AllToAll")''',
         language="python",
+    )
+
+    st.markdown("#### What `tiled`, `split_axis`, and `concat_axis` actually do")
+    st.markdown(
+        "<div class=\"step-desc\"><b>tiled</b> (on <code>all_gather</code>, <code>psum_scatter</code>, "
+        "<code>all_to_all</code>) controls whether the per-device pieces are stacked on a "
+        "<b>new</b> axis or concatenated into an <b>existing</b> one; it does not change what data moves, only "
+        "the shape of the result.<br><br>"
+        "<code>tiled=False</code> (the default) stacks: gathering a <code>(2048, 8192)</code> per-device shard "
+        "across 4 devices gives a new leading axis, shape <code>(4, 2048, 8192)</code>. Rank goes up by 1, and "
+        "it has to be reshaped/concatenated manually to get back a plain matrix.<br>"
+        "<code>tiled=True</code> concatenates directly into the axis already there: same "
+        "<code>(2048, 8192)</code> shards, same 4 devices, but the output is just <code>(8192, 8192)</code>. "
+        "Rank is unchanged, that axis is simply full-size again. This is almost always what is wanted when "
+        "working with sharded arrays, which is why every call above passes it.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div class=\"step-desc\"><b>split_axis / concat_axis</b> (AllToAll only) &mdash; AllToAll is the one "
+        "collective where a device sends a <i>different</i> slice of its local data to each other device, so it "
+        "needs two separate axis arguments: one for chopping up what is being <i>sent</i>, one for reassembling "
+        "what is <i>received</i>.<br><br>"
+        "<b>split_axis</b> &mdash; the axis of the local array to slice into N pieces (N = devices on that mesh "
+        "axis). Piece <i>k</i> is the one sent to device <i>k</i>.<br>"
+        "<b>concat_axis</b> &mdash; the axis along which the N incoming pieces (one from every device, including "
+        "the one kept locally) get stitched back together into the new local array.<br><br>"
+        "Worked through the example above: <code>x</code> is sharded <code>P(&quot;x&quot;, None)</code> over 4 "
+        "devices, so each device&rsquo;s local shard is <code>(2048, 8192)</code> (axis 0 already split 4 ways). "
+        "<code>all_to_all(x, &quot;x&quot;, split_axis=1, concat_axis=0, tiled=True)</code> then does, per "
+        "device:<br>"
+        "1) <b>split_axis=1</b> &mdash; chop the local <code>(2048, 8192)</code> array's axis 1 into 4 pieces of "
+        "<code>(2048, 2048)</code>, one per destination device.<br>"
+        "2) send piece <i>k</i> to device <i>k</i>, receive the matching piece back from every device.<br>"
+        "3) <b>concat_axis=0</b> &mdash; concatenate the 4 incoming <code>(2048, 2048)</code> pieces along axis "
+        "0, giving a new local shape of <code>(8192, 2048)</code>.<br><br>"
+        "Net effect: the local shape flips from <code>(2048, 8192)</code> to <code>(8192, 2048)</code> &mdash; "
+        "axis 0 is now full-size and axis 1 is the newly-sharded one. That is the &ldquo;transposing the sharded "
+        "axis&rdquo; behavior in the AllToAll card above.</div>",
+        unsafe_allow_html=True,
     )
 
 # =========================================================================== Q9
