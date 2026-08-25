@@ -20,10 +20,10 @@ const NODES = [
   { id: "norm1", type: "box", x: 260, y: 34, w: 120, h: 28, label: "norm" },
 
   { id: "q-proj", type: "box", x: 130, y: 100, w: 100, h: 44, label: "W_Q · X", sub: "→ Q  [B,T,N,H]" },
-  { id: "k-proj", type: "box", x: 270, y: 100, w: 100, h: 44, label: "W_K · X", sub: "→ K  [B,S,K,H]" },
-  { id: "v-proj", type: "box", x: 410, y: 100, w: 100, h: 44, label: "W_V · X", sub: "→ V  [B,S,K,H]" },
+  { id: "k-proj", type: "box", x: 270, y: 100, w: 100, h: 44, label: "W_K · X", sub: "→ K  [B,T,K,H]" },
+  { id: "v-proj", type: "box", x: 410, y: 100, w: 100, h: 44, label: "W_V · X", sub: "→ V  [B,T,K,H]" },
 
-  { id: "reshape-qkv", type: "box", x: 240, y: 172, w: 160, h: 26, label: "reshape", sub: "BTNH → BTKGH", dashed: true },
+  { id: "reshape-qkv", type: "box", x: 240, y: 172, w: 160, h: 26, label: "reshape", sub: "Q: BTNH → BTKGH", dashed: true },
 
   {
     id: "kv-cache",
@@ -37,7 +37,7 @@ const NODES = [
     flavor: "mem",
   },
 
-  { id: "attn-scores", type: "box", x: 220, y: 226, w: 200, h: 40, label: "Q · Kᵀ  + mask", sub: "→ [B,T,S,N,H]" },
+  { id: "attn-scores", type: "box", x: 220, y: 226, w: 200, h: 40, label: "Q · Kᵀ  + mask", sub: "→ [B,T,S,N]" },
   { id: "softmax", type: "box", x: 220, y: 284, w: 200, h: 26, label: "softmax", dashed: true },
   { id: "weighted-sum", type: "box", x: 220, y: 328, w: 200, h: 40, label: "softmax(QKᵀ) · V", sub: "→ [B,T,N,H]" },
 

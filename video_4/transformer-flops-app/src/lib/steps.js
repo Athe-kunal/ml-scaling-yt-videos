@@ -85,10 +85,14 @@ function kvCacheExpr() {
 // RMSNorm/LayerNorm has a real, computable cost — a per-channel scale
 // weight (params = D) and an elementwise pass over every activation to
 // compute the sum-of-squares, rescale, and apply that weight
-// (flops ≈ 4·B·T·D: square, reduce, rsqrt-multiply, scale). It's shown
-// here rather than hand-waved to zero — but it's ~D, next to the ~D²
-// projections around it, so it's excluded from the running totals below,
-// same as the scaling book's own accounting.
+// (flops ≈ 4·B·T·D: square, reduce, rsqrt-multiply, scale). This coefficient
+// is our own elementwise-op estimate, forward-pass only — NOT the book's
+// number, since the scaling book explicitly declines to derive one
+// ("layernorms are comparatively cheap and can be ignored for first-order
+// cost estimates") and doesn't use the ×6 train-step convention here. It's
+// shown rather than hand-waved to zero, but it's O(D), next to the O(D²)
+// projections around it, so it's excluded from the running totals below —
+// same call the scaling book makes.
 function normExpr() {
   return {
     paramsExpr: { coef: 1, symbols: ["D"] },
@@ -136,7 +140,7 @@ export const STEPS = [
     phase: "attn",
     node: "norm1",
     title: "Norm",
-    body: "A normalization layer (RMSNorm/LayerNorm) rescales <b>X</b> before the attention projections, with its own scale weight and a real elementwise cost — shown below, not hand-waved to zero. It's excluded from the running totals because it's ~D, next to the ~D² projections around it.",
+    body: "A normalization layer (commonly RMSNorm in gated-MLP architectures like this one) rescales <b>X</b> before the attention projections. Per token it's a square + sum-reduce (mean of squares) + rsqrt-scale + weight-multiply pass over <b>D</b> elements — 4 elementwise ops, so flops ≈ 4·B·T·D (forward-pass only, not the ×6 train convention used for matmuls below). The book itself doesn't pin a coefficient here — it calls norm cost negligible and skips it — so this is shown for completeness, not hand-waved to zero, then excluded from the running totals because it's O(D) next to the O(D²) projections around it.",
     checkpoint: "remat-cheap",
     ...normExpr(),
   },
@@ -154,7 +158,7 @@ export const STEPS = [
     phase: "attn",
     node: "k-proj",
     title: "K projection",
-    body: "Project onto the key heads: <b>X[B,T,D] · W_K[D,K,H] → K[B,S,K,H]</b>. Fewer KV heads than query heads (K ≤ N) is the multi-query/grouped-query trick.",
+    body: "Project onto the key heads: <b>X[B,T,D] · W_K[D,K,H] → K[B,T,K,H]</b>. It's T-shaped, same as the input — this is only the newly-computed slice; it becomes S-long once appended to the KV cache below. Fewer KV heads than query heads (K ≤ N) is the multi-query/grouped-query trick.",
     checkpoint: "saved",
     ...weightExpr(["D", "K", "H"]),
   },
@@ -163,7 +167,7 @@ export const STEPS = [
     phase: "attn",
     node: "v-proj",
     title: "V projection",
-    body: "Project onto the value heads: <b>X[B,T,D] · W_V[D,K,H] → V[B,S,K,H]</b>. Same shape and cost as the K projection.",
+    body: "Project onto the value heads: <b>X[B,T,D] · W_V[D,K,H] → V[B,T,K,H]</b>. Same T-shaped, newly-computed slice as the K projection — same shape and cost.",
     checkpoint: "saved",
     ...weightExpr(["D", "K", "H"]),
   },
@@ -172,7 +176,7 @@ export const STEPS = [
     phase: "attn",
     node: "reshape-qkv",
     title: "Reshape into heads",
-    body: "Q, K, V are reshaped/repeated so each of the N query heads is paired with its G = N/K key-value heads (<b>BTNH → BTKGH</b>). A pure layout change — no compute, no params.",
+    body: "Q's N heads are viewed as K groups of G = N/K heads each (<b>Q: BTNH → BTKGH</b>), so every group shares one KV head. K and V are already K-headed ([B,T,K,H]) and need no reshape of their own — they broadcast against Q's group axis G when scored. A pure layout change on Q — no compute, no params.",
     checkpoint: "remat-cheap",
     ...noCompute,
   },
@@ -181,7 +185,7 @@ export const STEPS = [
     phase: "attn",
     node: "kv-cache",
     title: "KV cache (K, V)",
-    body: "For autoregressive decoding, the reshaped <b>K</b> and <b>V</b> tensors are stored so future tokens can reuse them instead of recomputing attention over the whole prefix — this is the KV cache. It's a <b>memory</b> cost, not a FLOPs or params cost, and it's what actually limits how many sequences fit in memory at once. (Per layer, in bf16; multiply by the number of layers L for the model-wide cache.)",
+    body: "For autoregressive decoding, the newly-computed <b>K[B,T,K,H]</b> and <b>V[B,T,K,H]</b> slices are appended to the running cache so future tokens can reuse them instead of recomputing attention over the whole prefix — the full cache is <b>[B,S,K,H]</b>, S growing by T each step. It's a <b>memory</b> cost, not a FLOPs or params cost, and it's what actually limits how many sequences fit in memory at once. (Per layer, in bf16; multiply by the number of layers L for the model-wide cache.)",
     ...kvCacheExpr(),
   },
   {
@@ -189,7 +193,7 @@ export const STEPS = [
     phase: "attn",
     node: "attn-scores",
     title: "Attention scores + mask",
-    body: "Compute <b>Q · Kᵀ → [B,T,S,N,H]</b> and add the causal mask. No parameters live here — the cost scales with sequence length squared, which is why long context is expensive independent of model size.",
+    body: "Compute <b>Q · Kᵀ → [B,T,S,N]</b> and add the causal mask — H is the contracted (summed-over) axis here, not part of the output shape; it shows up in the flops count below but not in the tensor's shape. No parameters live here — the cost scales with sequence length squared, which is why long context is expensive independent of model size.",
     checkpoint: "remat-heavy",
     ...bilinearExpr(["B", "T", "S", "N", "H"]),
     ...rematExpr(["B", "T", "S", "N", "H"]),
@@ -236,7 +240,7 @@ export const STEPS = [
     phase: "mlp",
     node: "norm2",
     title: "Norm",
-    body: "A second normalization layer prepares the stream for the MLP block — same scale weight and elementwise cost as the first norm, and likewise excluded from the running totals below.",
+    body: "A second normalization layer (same RMSNorm, ≈4·B·T·D flops as derived above) prepares the stream for the MLP block, and is likewise excluded from the running totals below.",
     checkpoint: "remat-cheap",
     ...normExpr(),
   },
