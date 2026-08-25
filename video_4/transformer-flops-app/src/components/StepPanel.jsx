@@ -1,5 +1,6 @@
-import { STEPS, fmtNum, cumulativeTotals } from "../lib/steps";
+import { STEPS, fmtNum, fmtBytes, cumulativeTotals, stepParams, stepFlops, stepMem } from "../lib/steps";
 import { T, mono, sans, cond } from "../lib/theme";
+import DerivedFormula from "./DerivedFormula";
 
 const navBtn = (disabled) => ({
   fontFamily: mono,
@@ -14,7 +15,7 @@ const navBtn = (disabled) => ({
   transition: "all .16s",
 });
 
-function Stat({ label, value, accent }) {
+function Stat({ label, value, accent, color }) {
   return (
     <div>
       <div
@@ -34,7 +35,7 @@ function Stat({ label, value, accent }) {
           fontFamily: mono,
           fontSize: 17,
           fontWeight: 600,
-          color: accent ? T.accent : T.ink,
+          color: color || (accent ? T.accent : T.ink),
         }}
       >
         {value}
@@ -46,8 +47,9 @@ function Stat({ label, value, accent }) {
 export default function StepPanel({ step, dims, onStep }) {
   const idx = step;
   const s = STEPS[idx];
-  const stepParams = s.params(dims);
-  const stepFlops = s.flops(dims);
+  const thisStepParams = stepParams(s, dims);
+  const thisStepFlops = stepFlops(s, dims);
+  const thisStepMem = stepMem(s, dims);
   const totals = cumulativeTotals(dims, idx);
 
   return (
@@ -127,40 +129,89 @@ export default function StepPanel({ step, dims, onStep }) {
         {s.title}
       </div>
       <div
-        style={{ fontFamily: sans, fontSize: 13.5, lineHeight: 1.55, color: "#B6C2CF", marginBottom: 14 }}
+        style={{ fontFamily: sans, fontSize: 13.5, lineHeight: 1.55, color: T.soft, marginBottom: 14 }}
         dangerouslySetInnerHTML={{ __html: s.body }}
       />
 
-      {s.formulaLabel && (
+      {s.memExpr ? (
+        <div style={{ display: "grid", gap: 8, marginBottom: 6 }}>
+          <DerivedFormula label="bytes" expr={s.memExpr} dims={dims} formatResult={fmtBytes} resultColor={T.wire} />
+        </div>
+      ) : (s.paramsExpr || s.flopsExpr) ? (
+        <div style={{ display: "grid", gap: 8, marginBottom: s.excludedFromTotals ? 6 : 16 }}>
+          <DerivedFormula label="params" expr={s.paramsExpr} dims={dims} />
+          <DerivedFormula label="flops" expr={s.flopsExpr} dims={dims} />
+        </div>
+      ) : null}
+
+      {s.memExpr && (
         <div
           style={{
             fontFamily: mono,
-            fontSize: 12.5,
-            color: T.ink,
+            fontSize: 11,
+            color: T.dim,
+            marginBottom: 16,
+          }}
+        >
+          ↳ memory, not compute — not counted in the params/flops totals below.
+        </div>
+      )}
+
+      {s.excludedFromTotals && (
+        <div
+          style={{
+            fontFamily: mono,
+            fontSize: 11,
+            color: T.dim,
+            marginBottom: 16,
+          }}
+        >
+          ↳ computed above, but excluded from the running totals below — negligible next to the surrounding O(D²) matmuls.
+        </div>
+      )}
+
+      {!s.paramsExpr && !s.flopsExpr && !s.memExpr && !s.excludedFromTotals && (
+        <div
+          style={{
+            fontFamily: mono,
+            fontSize: 11.5,
+            color: T.dim,
             background: T.well,
             border: `1px solid ${T.rule}`,
             borderRadius: 8,
             padding: "9px 12px",
-            marginBottom: 14,
+            marginBottom: 16,
           }}
         >
-          {s.formulaLabel}
+          shape / elementwise op — no weights, no formula to derive
         </div>
       )}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 12,
-          marginBottom: 16,
-          paddingBottom: 16,
-          borderBottom: `1px solid ${T.rule}`,
-        }}
-      >
-        <Stat label="this step · params" value={fmtNum(stepParams)} accent={stepParams > 0} />
-        <Stat label="this step · flops" value={fmtNum(stepFlops)} accent={stepFlops > 0} />
-      </div>
+      {s.memExpr ? (
+        <div
+          style={{
+            marginBottom: 16,
+            paddingBottom: 16,
+            borderBottom: `1px solid ${T.rule}`,
+          }}
+        >
+          <Stat label="this step · KV cache" value={fmtBytes(thisStepMem)} accent color={T.wire} />
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 12,
+            marginBottom: 16,
+            paddingBottom: 16,
+            borderBottom: `1px solid ${T.rule}`,
+          }}
+        >
+          <Stat label="this step · params" value={fmtNum(thisStepParams)} accent={thisStepParams > 0} />
+          <Stat label="this step · flops" value={fmtNum(thisStepFlops)} accent={thisStepFlops > 0} />
+        </div>
+      )}
 
       <div
         style={{

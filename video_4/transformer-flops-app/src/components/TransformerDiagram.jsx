@@ -1,7 +1,16 @@
-import { STEPS } from "../lib/steps";
+import { STEPS, CHECKPOINT_META } from "../lib/steps";
 import { T, mono } from "../lib/theme";
 
 const NODE_ORDER = STEPS.map((s) => s.node);
+const NODE_CHECKPOINT = Object.fromEntries(STEPS.map((s) => [s.node, s.checkpoint]));
+
+const CATEGORY_COLOR = { accent: T.accent, bad: T.bad, wire: T.wire, soft: T.soft };
+const CATEGORY_FILL = {
+  accent: "rgba(110,243,221,0.14)",
+  bad: "rgba(255,138,138,0.14)",
+  wire: "rgba(255,201,77,0.14)",
+  soft: "rgba(199,209,221,0.10)",
+};
 
 // Layout mirrors the reference scaling-book diagram: attention block on top,
 // MLP block below, both flowing top-to-bottom with the residual stream
@@ -15,6 +24,18 @@ const NODES = [
   { id: "v-proj", type: "box", x: 410, y: 100, w: 100, h: 44, label: "W_V · X", sub: "→ V  [B,S,K,H]" },
 
   { id: "reshape-qkv", type: "box", x: 240, y: 172, w: 160, h: 26, label: "reshape", sub: "BTNH → BTKGH", dashed: true },
+
+  {
+    id: "kv-cache",
+    type: "box",
+    x: 430,
+    y: 160,
+    w: 170,
+    h: 50,
+    label: "KV cache (K, V)",
+    sub: "bf16 · per layer",
+    flavor: "mem",
+  },
 
   { id: "attn-scores", type: "box", x: 220, y: 226, w: 200, h: 40, label: "Q · Kᵀ  + mask", sub: "→ [B,T,S,N,H]" },
   { id: "softmax", type: "box", x: 220, y: 284, w: 200, h: 26, label: "softmax", dashed: true },
@@ -65,6 +86,7 @@ const EDGES = [
   { id: "e-q-reshape", from: ["q-proj", "bottom"], to: ["reshape-qkv", "top"], after: "reshape-qkv" },
   { id: "e-k-reshape", from: ["k-proj", "bottom"], to: ["reshape-qkv", "top"], after: "reshape-qkv" },
   { id: "e-v-reshape", from: ["v-proj", "bottom"], to: ["reshape-qkv", "top"], after: "reshape-qkv" },
+  { id: "e-reshape-kvcache", from: ["reshape-qkv", "right"], to: ["kv-cache", "left"], after: "kv-cache" },
   { id: "e-reshape-scores", from: ["reshape-qkv", "bottom"], to: ["attn-scores", "top"], after: "attn-scores" },
   { id: "e-scores-softmax", from: ["attn-scores", "bottom"], to: ["softmax", "top"], after: "softmax" },
   { id: "e-softmax-wsum", from: ["softmax", "bottom"], to: ["weighted-sum", "top"], after: "weighted-sum" },
@@ -89,7 +111,7 @@ function isRevealed(id, currentIndex) {
   return idx !== -1 && idx <= currentIndex;
 }
 
-export default function TransformerDiagram({ currentStepIndex, currentNode }) {
+export default function TransformerDiagram({ currentStepIndex, currentNode, checkpointMode }) {
   return (
     <div
       style={{
@@ -99,7 +121,7 @@ export default function TransformerDiagram({ currentStepIndex, currentNode }) {
         padding: "18px 14px 10px",
       }}
     >
-      <svg viewBox="0 0 620 790" style={{ width: "100%", display: "block" }}>
+      <svg viewBox="0 0 640 790" style={{ width: "100%", display: "block" }}>
         <defs>
           <marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
             <path d="M0,0 L7,3.5 L0,7 z" fill={T.dim} />
@@ -108,7 +130,7 @@ export default function TransformerDiagram({ currentStepIndex, currentNode }) {
 
         {/* residual bypass lines along the left */}
         {RESIDUAL_BYPASSES.map((b) => {
-          const on = isRevealed(b.after, currentStepIndex);
+          const on = checkpointMode || isRevealed(b.after, currentStepIndex);
           return (
             <path
               key={b.id}
@@ -126,7 +148,7 @@ export default function TransformerDiagram({ currentStepIndex, currentNode }) {
         {/* tap points where the bypass leaves the main line */}
         {["norm1", "norm2"].map((id) => {
           const n = NODE_BY_ID[id];
-          const on = isRevealed(id, currentStepIndex);
+          const on = checkpointMode || isRevealed(id, currentStepIndex);
           return (
             <line
               key={`tap-${id}`}
@@ -143,7 +165,7 @@ export default function TransformerDiagram({ currentStepIndex, currentNode }) {
         })}
 
         {EDGES.map((e) => {
-          const on = isRevealed(e.after, currentStepIndex);
+          const on = checkpointMode ? e.after !== "kv-cache" : isRevealed(e.after, currentStepIndex);
           const from = anchor(NODE_BY_ID[e.from[0]], e.from[1]);
           const to = anchor(NODE_BY_ID[e.to[0]], e.to[1]);
           return (
@@ -164,17 +186,27 @@ export default function TransformerDiagram({ currentStepIndex, currentNode }) {
         })}
 
         {NODES.map((n) => {
-          const on = isRevealed(n.id, currentStepIndex);
-          const active = n.id === currentNode;
-          const stroke = active ? T.accent : on ? T.soft : T.rule;
-          const strokeWidth = active ? 2.2 : 1.2;
-          const fill = active
-            ? "rgba(94,234,212,0.14)"
-            : on
-            ? T.panel
-            : "transparent";
+          const category = NODE_CHECKPOINT[n.id];
+          const on = checkpointMode ? Boolean(category) : isRevealed(n.id, currentStepIndex);
+          const active = !checkpointMode && n.id === currentNode;
+          const activeColor = n.flavor === "mem" ? T.wire : T.accent;
+          const activeFill = n.flavor === "mem" ? "rgba(255,201,77,0.14)" : "rgba(94,234,212,0.14)";
+
+          let stroke, fill, displaySub;
+          if (checkpointMode && category) {
+            const meta = CHECKPOINT_META[category];
+            stroke = CATEGORY_COLOR[meta.colorKey];
+            fill = CATEGORY_FILL[meta.colorKey];
+            displaySub = meta.label.toUpperCase();
+          } else {
+            stroke = active ? activeColor : on ? T.soft : T.rule;
+            fill = active ? activeFill : on ? T.panel : "transparent";
+            displaySub = n.sub;
+          }
+          const strokeWidth = active || (checkpointMode && category) ? 2.2 : 1.2;
           const textColor = on ? T.ink : T.dim;
-          const subColor = on ? T.soft : T.dim;
+          const subColor =
+            checkpointMode && category ? CATEGORY_COLOR[CHECKPOINT_META[category].colorKey] : on ? T.soft : T.dim;
 
           if (n.type === "label") {
             return (
@@ -186,7 +218,7 @@ export default function TransformerDiagram({ currentStepIndex, currentNode }) {
                 fontFamily={mono}
                 fontSize="16"
                 fontWeight="700"
-                fill={on ? T.accent : T.dim}
+                fill={checkpointMode && category ? CATEGORY_COLOR[CHECKPOINT_META[category].colorKey] : on ? T.accent : T.dim}
                 style={{ transition: "fill .35s ease" }}
               >
                 {n.text}
@@ -217,16 +249,17 @@ export default function TransformerDiagram({ currentStepIndex, currentNode }) {
                 >
                   {n.label}
                 </text>
-                {n.sub && (
+                {displaySub && (
                   <text
                     x={n.x}
                     y={n.y + n.r + 13}
                     textAnchor="middle"
                     fontFamily={mono}
                     fontSize="8.5"
+                    fontWeight={checkpointMode && category ? "700" : "400"}
                     fill={subColor}
                   >
-                    {n.sub}
+                    {displaySub}
                   </text>
                 )}
               </g>
@@ -248,7 +281,7 @@ export default function TransformerDiagram({ currentStepIndex, currentNode }) {
               />
               <text
                 x={n.x + n.w / 2}
-                y={n.y + n.h / 2 + (n.sub ? -2 : 4)}
+                y={n.y + n.h / 2 + (displaySub ? -2 : 4)}
                 textAnchor="middle"
                 fontFamily={mono}
                 fontSize="10.5"
@@ -257,16 +290,17 @@ export default function TransformerDiagram({ currentStepIndex, currentNode }) {
               >
                 {n.label}
               </text>
-              {n.sub && (
+              {displaySub && (
                 <text
                   x={n.x + n.w / 2}
                   y={n.y + n.h / 2 + 11}
                   textAnchor="middle"
                   fontFamily={mono}
                   fontSize="8.5"
+                  fontWeight={checkpointMode && category ? "700" : "400"}
                   fill={subColor}
                 >
-                  {n.sub}
+                  {displaySub}
                 </text>
               )}
             </g>

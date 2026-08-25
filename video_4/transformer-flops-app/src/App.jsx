@@ -5,6 +5,7 @@ import TransformerDiagram from "./components/TransformerDiagram";
 import StepPanel from "./components/StepPanel";
 import DimensionControls from "./components/DimensionControls";
 import LayerBreakdown from "./components/LayerBreakdown";
+import RematerializationPanel from "./components/RematerializationPanel";
 
 function useArrowKeys(setStep, total) {
   const onKey = useCallback(
@@ -30,6 +31,7 @@ export default function App() {
   const [step, setStep] = useState(0);
   const [dims, setDims] = useState(DEFAULT_DIMS);
   const [page, setPage] = useState("walkthrough");
+  const [checkpointMode, setCheckpointMode] = useState(false);
   useArrowKeys(setStep, STEPS.length);
 
   const clampedStep = Math.min(Math.max(step, 0), STEPS.length - 1);
@@ -151,6 +153,69 @@ export default function App() {
           })}
         </nav>
 
+        {page === "walkthrough" && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ fontFamily: mono, fontSize: 11.5, color: T.soft }}>
+              {checkpointMode
+                ? "Showing what's saved vs. rematerialized in the backward pass."
+                : "Step through the forward-pass dataflow."}
+            </div>
+            <button
+              onClick={() => setCheckpointMode((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontFamily: mono,
+                fontSize: 11,
+                letterSpacing: "0.04em",
+                padding: "7px 12px",
+                borderRadius: 999,
+                cursor: "pointer",
+                border: `1px solid ${checkpointMode ? T.bad : T.rule}`,
+                background: checkpointMode ? "rgba(255,138,138,0.1)" : T.panel,
+                color: checkpointMode ? T.bad : T.soft,
+                transition: "all .18s cubic-bezier(.2,.7,.3,1)",
+              }}
+            >
+              <span
+                style={{
+                  width: 30,
+                  height: 16,
+                  borderRadius: 999,
+                  background: checkpointMode ? T.bad : T.rule,
+                  position: "relative",
+                  transition: "background .18s ease",
+                  flexShrink: 0,
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: checkpointMode ? 16 : 2,
+                    width: 12,
+                    height: 12,
+                    borderRadius: "50%",
+                    background: T.bg,
+                    transition: "left .18s ease",
+                  }}
+                />
+              </span>
+              rematerialization view
+            </button>
+          </div>
+        )}
+
         {page === "walkthrough" ? (
           <div
             style={{
@@ -160,8 +225,16 @@ export default function App() {
               alignItems: "start",
             }}
           >
-            <TransformerDiagram currentStepIndex={clampedStep} currentNode={currentNode} />
-            <StepPanel step={clampedStep} dims={dims} onStep={setStep} />
+            <TransformerDiagram
+              currentStepIndex={clampedStep}
+              currentNode={currentNode}
+              checkpointMode={checkpointMode}
+            />
+            {checkpointMode ? (
+              <RematerializationPanel dims={dims} />
+            ) : (
+              <StepPanel step={clampedStep} dims={dims} onStep={setStep} />
+            )}
           </div>
         ) : (
           <LayerBreakdown dims={dims} />
