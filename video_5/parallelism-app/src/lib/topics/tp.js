@@ -1,0 +1,279 @@
+// Tensor Parallelism — one step per line of the exact pseudocode from
+// https://jax-ml.github.io/scaling-book/training/, "Tensor Parallelism".
+// Same 2-matmul MLP block as fsdp.js (In -> Win -> Tmp -> Wout -> Out ->
+// Loss, then dOut -> dWout -> dTmp -> dWin -> dIn), but the sharding is
+// inverted: here the WEIGHTS never move — Win[D,F_Y] and Wout[F_Y,D] sit
+// fixed on their device the whole block — and it's the ACTIVATION that
+// cycles between a sharded resting state (In[B,D_Y]) and a temporarily
+// gathered, replicated form (In[B,D]), via an AllGather at each block's
+// entry and a ReduceScatter at its exit. Both collectives sit on the
+// critical path (unlike FSDP's prefetchable weight AllGathers), since
+// compute can't start until the activation they produce is in hand.
+//
+// Diagram nodes are pure LaTeX (rendered via MathLabel, no $ needed).
+// notation/body/note/comm.label are prose+math strings using $...$ spans
+// (see lib/latex.js). Reuses FSDPDiagram (kind: "tp") since both topics
+// trace the identical named-tensor set through a forward and backward row.
+
+function node(label, state) {
+  return { label, state };
+}
+
+const HIDDEN = () => node("", "hidden");
+
+function snapshot(overrides) {
+  const base = {
+    In: HIDDEN(),
+    Win: HIDDEN(),
+    Tmp: HIDDEN(),
+    Wout: HIDDEN(),
+    Out: HIDDEN(),
+    Loss: HIDDEN(),
+    dOut: HIDDEN(),
+    dWout: HIDDEN(),
+    dTmp: HIDDEN(),
+    dWin: HIDDEN(),
+    dIn: HIDDEN(),
+  };
+  return { ...base, ...overrides };
+}
+
+function diagramFrom(snap, comm) {
+  const forward = ["In", "Win", "Tmp", "Wout", "Out", "Loss"].map((id) => ({ id, ...snap[id] }));
+  const backward = ["dOut", "dWout", "dTmp", "dWin", "dIn"].map((id) => ({ id, ...snap[id] }));
+  return { kind: "tp", forward, backward, comm };
+}
+
+// Once the forward pass has finished (step 6 onward), none of Win/Tmp/
+// Wout/Out/Loss ever change state again — unlike FSDP, TP's weights never
+// move, so nothing needs to drop back to "ghost". Folded into every
+// backward-step snapshot below so stepping through the backward pass
+// doesn't make the completed forward blocks vanish.
+const FWD_DONE = {
+  In: node("In[B,D]", "solid"),
+  Win: node("Win[D,F_Y]", "solid"),
+  Tmp: node("Tmp[B,F_Y]", "solid"),
+  Wout: node("Wout[F_Y,D]", "solid"),
+  Out: node("Out[B,D_Y]", "solid"),
+  Loss: node("Loss[B]", "solid"),
+};
+
+export const STEPS = [
+  {
+    id: 1,
+    title: "Setup — weights fixed, activations sharded at rest",
+    notation: "$In[B,D_Y]$ (sharded along $D$)$\\quad Win[D,F_Y]$ (column-sharded)$\\quad Wout[F_Y,D]$ (row-sharded)",
+    body:
+      "Two GPUs share mesh axis $Y$. Unlike FSDP, where the weights themselves get gathered and scattered, here the weight shards $Win[D,F_Y]$ and $Wout[F_Y,D]$ never move — they sit fixed on their device for this entire block. What moves instead is the <b>activation</b>: the residual stream is kept sharded along the feature dimension $D$ between blocks (cheaper in memory than keeping it fully replicated), and gets temporarily gathered and re-scattered as it passes through.",
+    diagram: diagramFrom(
+      snapshot({
+        In: node("In[B,D_Y]", "ghost"),
+        Win: node("Win[D,F_Y]", "solid"),
+        Wout: node("Wout[F_Y,D]", "solid"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 2,
+    title: "Line 1 — AllGather In",
+    notation: "$In[B,D] = \\text{AllGather}_Y\\!\\left(In[B,D_Y]\\right)$",
+    body: "On the critical path — unlike FSDP's weight AllGathers, this can't be prefetched during a previous step: the block's first matmul can't start until the full activation is in hand. Every device ends this step holding the same, fully replicated $In[B,D]$.",
+    diagram: diagramFrom(
+      snapshot({
+        In: node("In[B,D]", "active"),
+        Win: node("Win[D,F_Y]", "solid"),
+        Wout: node("Wout[F_Y,D]", "solid"),
+      }),
+      { type: "allgather", targetId: "In", label: "$In[B,D] = \\text{AllGather}_Y(In[B,D_Y])$" }
+    ),
+  },
+  {
+    id: 3,
+    title: "Line 2 — column matmul",
+    notation: "$Tmp[B,F_Y] = In[B,D] \\cdot_D Win[D,F_Y]$",
+    body: "The contracting dimension $D$ isn't sharded — only $F$ is, via $Win$ — so this matmul needs zero communication. Each device produces its own $F_Y$ shard of $Tmp$.",
+    diagram: diagramFrom(
+      snapshot({
+        In: node("In[B,D]", "solid"),
+        Win: node("Win[D,F_Y]", "solid"),
+        Tmp: node("Tmp[B,F_Y]", "active"),
+        Wout: node("Wout[F_Y,D]", "solid"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 4,
+    title: "Line 3 — row matmul, unreduced",
+    notation: "$Out[B,D]^{\\{U_Y\\}} = Tmp[B,F_Y] \\cdot_F Wout[F_Y,D]$",
+    body: "Now $F$ is the contracting dimension and it <i>is</i> sharded, so each device only computes a partial contribution — tagged $\\{U_Y\\}$ for “unreduced along $Y$”: the right shape, but the wrong (incomplete) value until every device's partial is combined.",
+    diagram: diagramFrom(
+      snapshot({
+        Tmp: node("Tmp[B,F_Y]", "solid"),
+        Wout: node("Wout[F_Y,D]", "solid"),
+        Win: node("Win[D,F_Y]", "solid"),
+        Out: node("Out[B,D]^{\\{U_Y\\}}", "partial"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 5,
+    title: "Line 4 — ReduceScatter Out",
+    notation: "$Out[B,D_Y] = \\text{ReduceScatter}_Y\\!\\left(Out[B,D]^{\\{U_Y\\}}\\right)$",
+    body: "On the critical path — this single collective both sums the partial output across $Y$ and re-shards it along $D$ in the same step, so the block ends exactly like it started: sharded, never fully materialized on one device. An AllReduce is exactly an AllGather followed by a ReduceScatter — splitting the block's two ends like this is what lets each half overlap with a neighboring block's compute.",
+    diagram: diagramFrom(
+      snapshot({
+        Tmp: node("Tmp[B,F_Y]", "solid"),
+        Wout: node("Wout[F_Y,D]", "solid"),
+        Win: node("Win[D,F_Y]", "solid"),
+        Out: node("Out[B,D_Y]", "active"),
+      }),
+      { type: "reducescatter", targetId: "Out", label: "$Out[B,D_Y] = \\text{ReduceScatter}_Y(Out[B,D]^{\\{U_Y\\}})$" }
+    ),
+  },
+  {
+    id: 6,
+    title: "Line 5 — loss",
+    notation: "$Loss[B] = \\ldots$",
+    body: "Forward pass complete — $Out[B,D_Y]$ is exactly the sharded resting state the next block (or the loss) expects as its own input. Backward now needs to produce $dWout[F_Y,D]$ and $dWin[D,F_Y]$.",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        Loss: node("Loss[B]", "active"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 7,
+    title: "Line 6 — dOut",
+    notation: "$dOut[B,D_Y] = \\ldots$",
+    body: "Backward starts from the next layer (or the loss) handing back a gradient in exactly the same sharded layout the forward pass produced its output in. $Tmp$ is kept around from the forward pass — it's needed again in a few lines.",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        Win: node("Win[D,F_Y]", "solid"),
+        Wout: node("Wout[F_Y,D]", "solid"),
+        dOut: node("dOut[B,D_Y]", "active"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 8,
+    title: "Line 7 — AllGather dOut",
+    notation: "$dOut[B,D] = \\text{AllGather}_Y\\!\\left(dOut[B,D_Y]\\right)$",
+    body: "On the critical path — mirrors line 1 exactly, but for the gradient: $dOut$ must be fully replicated along $D$ before it can be contracted against $Wout$'s replicated $D$ side.",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        Win: node("Win[D,F_Y]", "solid"),
+        Wout: node("Wout[F_Y,D]", "solid"),
+        dOut: node("dOut[B,D]", "active"),
+      }),
+      { type: "allgather", targetId: "dOut", label: "$dOut[B,D] = \\text{AllGather}_Y(dOut[B,D_Y])$" }
+    ),
+  },
+  {
+    id: 9,
+    title: "Line 8 — dWout, local",
+    notation: "$dWout[F_Y,D] = Tmp[B,F_Y] \\cdot_B dOut[B,D]$",
+    body: "Contract over the batch dimension $B$. $Tmp$'s shard and the now-gathered $dOut$ are both already local — this weight gradient is a pure local matmul, no communication needed.",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        Win: node("Win[D,F_Y]", "solid"),
+        Wout: node("Wout[F_Y,D]", "solid"),
+        dOut: node("dOut[B,D]", "solid"),
+        dWout: node("dWout[F_Y,D]", "active"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 10,
+    title: "Line 9 — dTmp, local",
+    notation: "$dTmp[B,F_Y] = dOut[B,D] \\cdot_D Wout[F_Y,D]$",
+    body: "Contract over $D$, fully replicated on both operands — local, no communication. $dOut[B,D]$ can be thrown away right after this; it isn't needed again.",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        Win: node("Win[D,F_Y]", "solid"),
+        Wout: node("Wout[F_Y,D]", "solid"),
+        dOut: node("dOut[B,D]", "solid"),
+        dWout: node("dWout[F_Y,D]", "solid"),
+        dTmp: node("dTmp[B,F_Y]", "active"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 11,
+    title: "Line 10 — AllGather In (reused)",
+    notation: "$In[B,D] = \\text{AllGather}_Y\\!\\left(In[B,D_Y]\\right)$",
+    body: "The column-parallel weight's gradient needs the same fully-gathered $In[B,D]$ the forward pass produced back in line 1.",
+    note: "This can be skipped entirely by simply keeping (or re-checkpointing) line 1's result instead of paying for the same AllGather twice — the book calls this out as a direct saving.",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        In: node("In[B,D]", "active"),
+        dOut: node("dOut[B,D]", "solid"),
+        dWout: node("dWout[F_Y,D]", "solid"),
+        dTmp: node("dTmp[B,F_Y]", "solid"),
+      }),
+      { type: "allgather", targetId: "In", label: "$In[B,D] = \\text{AllGather}_Y(In[B,D_Y])$" }
+    ),
+  },
+  {
+    id: 12,
+    title: "Line 11 — dWin, local",
+    notation: "$dWin[D,F_Y] = In[B,D] \\cdot_B dTmp[B,F_Y]$",
+    body: "Contract over batch $B$ again — both operands local, no communication, exactly mirroring $dWout$'s derivation in line 8.",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        dOut: node("dOut[B,D]", "solid"),
+        dWout: node("dWout[F_Y,D]", "solid"),
+        dTmp: node("dTmp[B,F_Y]", "solid"),
+        dWin: node("dWin[D,F_Y]", "active"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 13,
+    title: "Line 12 — dIn, unreduced",
+    notation: "$dIn[B,D]^{\\{U_Y\\}} = dTmp[B,F_Y] \\cdot_F Win[D,F_Y]$",
+    body: "Contract over the sharded $F_Y$ — each device produces only a partial contribution, tagged $\\{U_Y\\}$, mirroring line 3 exactly. This is the gradient the <i>previous</i> layer needs.",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        dOut: node("dOut[B,D]", "solid"),
+        dWout: node("dWout[F_Y,D]", "solid"),
+        dTmp: node("dTmp[B,F_Y]", "solid"),
+        dWin: node("dWin[D,F_Y]", "solid"),
+        dIn: node("dIn[B,D]^{\\{U_Y\\}}", "partial"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 14,
+    title: "Line 13 — ReduceScatter dIn",
+    notation: "$dIn[B,D_Y] = \\text{ReduceScatter}_Y\\!\\left(dIn[B,D]^{\\{U_Y\\}}\\right)$",
+    body: "On the critical path — closes the block exactly like line 4 did for the forward pass: sum the partial gradient across $Y$ and re-shard along $D$, handing the previous layer a $dIn[B,D_Y]$ in the same sharded resting state its own forward output was in.",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        dOut: node("dOut[B,D]", "solid"),
+        dWout: node("dWout[F_Y,D]", "solid"),
+        dTmp: node("dTmp[B,F_Y]", "solid"),
+        dWin: node("dWin[D,F_Y]", "solid"),
+        dIn: node("dIn[B,D_Y]", "active"),
+      }),
+      { type: "reducescatter", targetId: "dIn", label: "$dIn[B,D_Y] = \\text{ReduceScatter}_Y(dIn[B,D]^{\\{U_Y\\}})$" }
+    ),
+  },
+];

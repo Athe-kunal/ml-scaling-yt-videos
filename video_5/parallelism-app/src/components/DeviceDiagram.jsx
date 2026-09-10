@@ -1,11 +1,12 @@
 import { T, mono } from "../lib/theme";
 import { STATE_STYLE, COMM_COLOR, COMM_TITLE, CommBar } from "./DiagramPrimitives";
+import MathLabel from "./MathLabel";
 
-// Generic renderer for every topic's per-step diagram descriptor:
-// two device panels, each with a weight-chain row, a gradient row, and an
-// optimizer-state row, plus an optional cross-device communication arrow.
-// Nothing here is topic-specific — DP/ZeRO-1/2/3 all drive this purely
-// through the `diagram` object their steps.js files hand it.
+// Generic renderer for DP/ZeRO-1/2/3's per-step diagram descriptor: two
+// device panels, each holding the book's 2-matmul MLP weights — Win and
+// Wout — plus a gradient row and an optimizer-state row, and an optional
+// cross-device communication arrow. Nothing here is topic-specific; the
+// `diagram` object each topic's steps.js hands it drives everything.
 
 const PANEL = [
   { x: 60, mbX: 0 },
@@ -14,16 +15,15 @@ const PANEL = [
 const PANEL_W = 370;
 const PANEL_H = 190;
 const PANEL_Y = 40;
-const LAYER_OFFSETS = [20, 100, 180, 260];
-const LAYER_W = 60;
-const LAYER_H = 36;
+const LAYER_KEYS = ["in", "out"];
+const LAYER_OFFSETS = [20, 195];
+const LAYER_W = 150;
+const LAYER_H = 40;
 const LAYER_Y = 96;
-const GRAD_Y = 150;
+const GRAD_Y = 154;
 const OPTIM_Y = 186;
-const OPTIM_W = 50;
+const OPTIM_W = 90;
 const OPTIM_H = 26;
-
-const SUB = ["₁", "₂", "₃", "₄"];
 
 function Box({ x, y, w, h, label, state, small }) {
   const st = STATE_STYLE[state] || STATE_STYLE.hidden;
@@ -40,17 +40,7 @@ function Box({ x, y, w, h, label, state, small }) {
         strokeWidth={state === "active" ? 2 : 1.2}
         strokeDasharray={st.dash}
       />
-      <text
-        x={x + w / 2}
-        y={y + h / 2 + (small ? 3 : 4)}
-        textAnchor="middle"
-        fontFamily={mono}
-        fontSize={small ? 9.5 : 10.5}
-        fontWeight="600"
-        fill={st.text}
-      >
-        {label}
-      </text>
+      <MathLabel x={x} y={y} w={w} h={h} text={label} color={st.text} fontSize={small ? 10.5 : 12} />
     </g>
   );
 }
@@ -125,7 +115,7 @@ export default function DeviceDiagram({ diagram }) {
                 />
               ))}
 
-              {LAYER_OFFSETS.slice(0, 3).map((off, li) => {
+              {LAYER_OFFSETS.slice(0, -1).map((off, li) => {
                 const a = dev.layers[li];
                 const b = dev.layers[li + 1];
                 const on = a.state !== "hidden" && b.state !== "hidden";
@@ -149,31 +139,28 @@ export default function DeviceDiagram({ diagram }) {
               {LAYER_OFFSETS.map((off, li) => {
                 const g = dev.grads[li];
                 if (g.state === "hidden") return null;
-                const gs = STATE_STYLE[g.state] || STATE_STYLE.solid;
                 return (
-                  <text
+                  <MathLabel
                     key={`g${li}`}
-                    x={p.x + off + LAYER_W / 2}
-                    y={GRAD_Y}
-                    textAnchor="middle"
-                    fontFamily={mono}
-                    fontSize="9"
-                    fill={g.state === "active" ? T.accent : T.wire}
-                    opacity={gs.opacity}
-                  >
-                    {g.label}
-                  </text>
+                    x={p.x + off}
+                    y={GRAD_Y - 11}
+                    w={LAYER_W}
+                    h={16}
+                    text={g.label}
+                    color={g.state === "active" ? T.accent : T.wire}
+                    fontSize={10.5}
+                  />
                 );
               })}
 
               {LAYER_OFFSETS.map((off, li) => (
                 <Box
                   key={`o${li}`}
-                  x={p.x + off}
+                  x={p.x + off + (LAYER_W - OPTIM_W) / 2}
                   y={OPTIM_Y}
                   w={OPTIM_W}
                   h={OPTIM_H}
-                  label={`m${SUB[li]},v${SUB[li]}`}
+                  label={`m_{${LAYER_KEYS[li]}},v_{${LAYER_KEYS[li]}}`}
                   state={dev.optim[li].state}
                   small
                 />

@@ -1,7 +1,8 @@
 import { T, mono } from "../lib/theme";
+import { withInlineMath } from "../lib/latex";
 
-// Shared visual vocabulary for every diagram (DeviceDiagram, TPDiagram,
-// EmbedDiagram): the hidden/ghost/solid/active box states, the comm-op
+// Shared visual vocabulary for every diagram (DeviceDiagram, FSDPDiagram):
+// the hidden/ghost/solid/active/partial box states, the comm-op
 // color/title lookup, and the comm arrow + label bar drawn under an SVG
 // whenever a step involves cross-device communication.
 
@@ -71,14 +72,12 @@ export function CommBar({ comm }) {
     <div
       style={{
         marginTop: 10,
-        fontFamily: mono,
-        fontSize: 11,
+        fontSize: 13,
         color: COMM_COLOR[comm.type],
         textAlign: "center",
-        wordBreak: "break-word",
+        overflowX: "auto",
       }}
-    >
-      {comm.label}
-    </div>
+      dangerouslySetInnerHTML={{ __html: withInlineMath(comm.label) }}
+    />
   );
 }

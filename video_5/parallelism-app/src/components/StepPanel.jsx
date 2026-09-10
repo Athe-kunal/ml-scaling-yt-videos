@@ -1,4 +1,5 @@
 import { T, mono, sans, cond } from "../lib/theme";
+import { withInlineMath } from "../lib/latex";
 
 const navBtn = (disabled) => ({
   fontFamily: mono,
@@ -94,24 +95,22 @@ export default function StepPanel({ steps, step, onStep }) {
 
       <div
         style={{
-          fontFamily: mono,
-          fontSize: 12,
-          lineHeight: 1.6,
+          fontSize: 14,
+          lineHeight: 1.8,
           color: T.accent2,
           background: T.well,
           border: `1px solid ${T.rule}`,
           borderRadius: 8,
-          padding: "9px 12px",
+          padding: "10px 12px",
           marginBottom: 12,
-          wordBreak: "break-word",
+          overflowX: "auto",
         }}
-      >
-        {s.notation}
-      </div>
+        dangerouslySetInnerHTML={{ __html: withInlineMath(s.notation) }}
+      />
 
       <div
         style={{ fontFamily: sans, fontSize: 13.5, lineHeight: 1.55, color: T.soft, marginBottom: s.note || s.formula ? 12 : 0 }}
-        dangerouslySetInnerHTML={{ __html: s.body }}
+        dangerouslySetInnerHTML={{ __html: withInlineMath(s.body) }}
       />
 
       {s.note && (
@@ -125,27 +124,24 @@ export default function StepPanel({ steps, step, onStep }) {
             paddingLeft: 10,
             marginBottom: s.formula ? 12 : 0,
           }}
-        >
-          {s.note}
-        </div>
+          dangerouslySetInnerHTML={{ __html: withInlineMath(s.note) }}
+        />
       )}
 
       {s.formula && (
         <div
           style={{
-            fontFamily: mono,
-            fontSize: 11.5,
+            fontSize: 13.5,
             lineHeight: 1.7,
             color: T.wire,
             background: T.well,
             border: `1px solid ${T.rule}`,
             borderRadius: 8,
-            padding: "9px 12px",
-            wordBreak: "break-word",
+            padding: "10px 12px",
+            overflowX: "auto",
           }}
-        >
-          {s.formula}
-        </div>
+          dangerouslySetInnerHTML={{ __html: withInlineMath(s.formula) }}
+        />
       )}
     </div>
   );

@@ -1,16 +1,29 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { T, mono, sans, cond } from "./lib/theme";
 import { TOPICS, DEFAULT_TOPIC_ID, resolveTopicId } from "./lib/topics";
 import DeviceDiagram from "./components/DeviceDiagram";
-import TPDiagram from "./components/TPDiagram";
-import EmbedDiagram from "./components/EmbedDiagram";
+import FSDPDiagram from "./components/FSDPDiagram";
 import StepPanel from "./components/StepPanel";
 
 const ENV_TOPIC = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_TOPIC) || DEFAULT_TOPIC_ID;
 
+function useArrowKeys(setStep, total) {
+  const onKey = useCallback(
+    (e) => {
+      if (e.target.tagName === "INPUT") return;
+      if (e.key === "ArrowRight") setStep((s) => Math.min(s + 1, total - 1));
+      if (e.key === "ArrowLeft") setStep((s) => Math.max(s - 1, 0));
+    },
+    [setStep, total]
+  );
+  useEffect(() => {
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onKey]);
+}
+
 function DiagramFor({ diagram }) {
-  if (diagram.kind === "matmul") return <TPDiagram diagram={diagram} />;
-  if (diagram.kind === "embed") return <EmbedDiagram diagram={diagram} />;
+  if (diagram.kind === "fsdp" || diagram.kind === "tp") return <FSDPDiagram diagram={diagram} />;
   return <DeviceDiagram diagram={diagram} />;
 }
 
@@ -21,6 +34,7 @@ export default function App() {
   const topic = useMemo(() => TOPICS.find((t) => t.id === topicId) || TOPICS[0], [topicId]);
   const clampedStep = Math.min(step, topic.steps.length - 1);
   const currentStep = topic.steps[clampedStep];
+  useArrowKeys(setStep, topic.steps.length);
 
   function selectTopic(id) {
     setTopicId(id);

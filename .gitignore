@@ -16,6 +16,7 @@ eggs/
 .eggs/
 lib/
 !video_4/transformer-flops-app/src/lib/
+!video_5/parallelism-app/src/lib/
 lib64/
 parts/
 sdist/
