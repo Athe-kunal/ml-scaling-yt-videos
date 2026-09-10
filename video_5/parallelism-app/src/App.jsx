@@ -3,6 +3,7 @@ import { T, mono, sans, cond } from "./lib/theme";
 import { TOPICS, DEFAULT_TOPIC_ID, resolveTopicId } from "./lib/topics";
 import DeviceDiagram from "./components/DeviceDiagram";
 import FSDPDiagram from "./components/FSDPDiagram";
+import MatrixShapes from "./components/MatrixShapes";
 import StepPanel from "./components/StepPanel";
 
 const ENV_TOPIC = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_TOPIC) || DEFAULT_TOPIC_ID;
@@ -113,6 +114,7 @@ export default function App() {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 18 }}>
           <DiagramFor diagram={currentStep.diagram} />
+          {currentStep.matrices && <MatrixShapes items={currentStep.matrices} />}
           <StepPanel steps={topic.steps} step={clampedStep} onStep={setStep} />
         </div>
       </div>

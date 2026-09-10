@@ -44,6 +44,19 @@ function diagramFrom(snap, comm) {
   return { kind: "tp", forward, backward, comm };
 }
 
+// Per-line "shapes & sharding" row (rendered by MatrixShapes, a separate
+// panel from the tensor-flow diagram above): the 1-3 concrete matrices
+// this pseudocode line actually operates on, each annotated with which
+// axis (if any) is sharded. mat() mirrors node()'s tensor ids/labels but
+// carries shape + sharding instead of a flow state; op() is the connecting
+// "×" / "=" / "→" between two matrices, optionally tinted to a comm type.
+function mat(id, rows, cols, opts = {}) {
+  return { id, rows, cols, shardAxis: null, state: "solid", tone: "act", ...opts };
+}
+function op(symbol, opts = {}) {
+  return { op: symbol, ...opts };
+}
+
 // Once the forward pass has finished (step 6 onward), none of Win/Tmp/
 // Wout/Out/Loss ever change state again — unlike FSDP, TP's weights never
 // move, so nothing needs to drop back to "ghost". Folded into every
@@ -73,6 +86,11 @@ export const STEPS = [
       }),
       null
     ),
+    matrices: [
+      mat("In", "B", "D_Y", { shardAxis: "cols", tone: "act" }),
+      mat("Win", "D", "F_Y", { shardAxis: "cols", tone: "weight" }),
+      mat("Wout", "F_Y", "D", { shardAxis: "rows", tone: "weight" }),
+    ],
   },
   {
     id: 2,
@@ -87,6 +105,11 @@ export const STEPS = [
       }),
       { type: "allgather", targetId: "In", label: "$In[B,D] = \\text{AllGather}_Y(In[B,D_Y])$" }
     ),
+    matrices: [
+      mat("In", "B", "D_Y", { shardAxis: "cols", tone: "act" }),
+      op("→", { comm: "allgather" }),
+      mat("In", "B", "D", { tone: "act", state: "active" }),
+    ],
   },
   {
     id: 3,
@@ -102,6 +125,13 @@ export const STEPS = [
       }),
       null
     ),
+    matrices: [
+      mat("In", "B", "D", { tone: "act" }),
+      op("×"),
+      mat("Win", "D", "F_Y", { shardAxis: "cols", tone: "weight" }),
+      op("="),
+      mat("Tmp", "B", "F_Y", { shardAxis: "cols", tone: "act", state: "active" }),
+    ],
   },
   {
     id: 4,
@@ -117,6 +147,13 @@ export const STEPS = [
       }),
       null
     ),
+    matrices: [
+      mat("Tmp", "B", "F_Y", { shardAxis: "cols", tone: "act" }),
+      op("×"),
+      mat("Wout", "F_Y", "D", { shardAxis: "rows", tone: "weight" }),
+      op("="),
+      mat("Out", "B", "D", { tone: "act", state: "partial" }),
+    ],
   },
   {
     id: 5,
@@ -132,6 +169,11 @@ export const STEPS = [
       }),
       { type: "reducescatter", targetId: "Out", label: "$Out[B,D_Y] = \\text{ReduceScatter}_Y(Out[B,D]^{\\{U_Y\\}})$" }
     ),
+    matrices: [
+      mat("Out", "B", "D", { tone: "act", state: "partial" }),
+      op("→", { comm: "reducescatter" }),
+      mat("Out", "B", "D_Y", { shardAxis: "cols", tone: "act", state: "active" }),
+    ],
   },
   {
     id: 6,
@@ -145,6 +187,11 @@ export const STEPS = [
       }),
       null
     ),
+    matrices: [
+      mat("Out", "B", "D_Y", { shardAxis: "cols", tone: "act" }),
+      op("→"),
+      mat("Loss", "B", "1", { tone: "act", state: "active" }),
+    ],
   },
   {
     id: 7,
@@ -160,6 +207,7 @@ export const STEPS = [
       }),
       null
     ),
+    matrices: [mat("dOut", "B", "D_Y", { shardAxis: "cols", tone: "grad", state: "active" })],
   },
   {
     id: 8,
@@ -175,6 +223,11 @@ export const STEPS = [
       }),
       { type: "allgather", targetId: "dOut", label: "$dOut[B,D] = \\text{AllGather}_Y(dOut[B,D_Y])$" }
     ),
+    matrices: [
+      mat("dOut", "B", "D_Y", { shardAxis: "cols", tone: "grad" }),
+      op("→", { comm: "allgather" }),
+      mat("dOut", "B", "D", { tone: "grad", state: "active" }),
+    ],
   },
   {
     id: 9,
@@ -191,6 +244,13 @@ export const STEPS = [
       }),
       null
     ),
+    matrices: [
+      mat("Tmp", "B", "F_Y", { shardAxis: "cols", tone: "act" }),
+      op("×"),
+      mat("dOut", "B", "D", { tone: "grad" }),
+      op("="),
+      mat("dWout", "F_Y", "D", { shardAxis: "rows", tone: "grad", state: "active" }),
+    ],
   },
   {
     id: 10,
@@ -208,6 +268,13 @@ export const STEPS = [
       }),
       null
     ),
+    matrices: [
+      mat("dOut", "B", "D", { tone: "grad" }),
+      op("×"),
+      mat("Wout", "F_Y", "D", { shardAxis: "rows", tone: "weight" }),
+      op("="),
+      mat("dTmp", "B", "F_Y", { shardAxis: "cols", tone: "grad", state: "active" }),
+    ],
   },
   {
     id: 11,
@@ -225,6 +292,11 @@ export const STEPS = [
       }),
       { type: "allgather", targetId: "In", label: "$In[B,D] = \\text{AllGather}_Y(In[B,D_Y])$" }
     ),
+    matrices: [
+      mat("In", "B", "D_Y", { shardAxis: "cols", tone: "act" }),
+      op("→", { comm: "allgather" }),
+      mat("In", "B", "D", { tone: "act", state: "active" }),
+    ],
   },
   {
     id: 12,
@@ -241,6 +313,13 @@ export const STEPS = [
       }),
       null
     ),
+    matrices: [
+      mat("In", "B", "D", { tone: "act" }),
+      op("×"),
+      mat("dTmp", "B", "F_Y", { shardAxis: "cols", tone: "grad" }),
+      op("="),
+      mat("dWin", "D", "F_Y", { shardAxis: "cols", tone: "grad", state: "active" }),
+    ],
   },
   {
     id: 13,
@@ -258,6 +337,13 @@ export const STEPS = [
       }),
       null
     ),
+    matrices: [
+      mat("dTmp", "B", "F_Y", { shardAxis: "cols", tone: "grad" }),
+      op("×"),
+      mat("Win", "D", "F_Y", { shardAxis: "cols", tone: "weight" }),
+      op("="),
+      mat("dIn", "B", "D", { tone: "grad", state: "partial" }),
+    ],
   },
   {
     id: 14,
@@ -275,5 +361,10 @@ export const STEPS = [
       }),
       { type: "reducescatter", targetId: "dIn", label: "$dIn[B,D_Y] = \\text{ReduceScatter}_Y(dIn[B,D]^{\\{U_Y\\}})$" }
     ),
+    matrices: [
+      mat("dIn", "B", "D", { tone: "grad", state: "partial" }),
+      op("→", { comm: "reducescatter" }),
+      mat("dIn", "B", "D_Y", { shardAxis: "cols", tone: "grad", state: "active" }),
+    ],
   },
 ];
