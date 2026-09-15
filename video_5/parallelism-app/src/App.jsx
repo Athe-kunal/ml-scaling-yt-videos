@@ -24,7 +24,7 @@ function useArrowKeys(setStep, total) {
 }
 
 function DiagramFor({ diagram }) {
-  if (diagram.kind === "fsdp" || diagram.kind === "tp") return <FSDPDiagram diagram={diagram} />;
+  if (diagram.kind === "fsdp" || diagram.kind === "tp" || diagram.kind === "fsdp_tp") return <FSDPDiagram diagram={diagram} />;
   return <DeviceDiagram diagram={diagram} />;
 }
 
