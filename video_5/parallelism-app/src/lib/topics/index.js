@@ -1,3 +1,4 @@
+import { STEPS as NO_PARALLELISM_STEPS } from "./no_parallelism";
 import { STEPS as DP_STEPS } from "./dp";
 import { STEPS as ZERO1_STEPS } from "./zero1";
 import { STEPS as ZERO2_STEPS } from "./zero2";
@@ -7,6 +8,7 @@ import { STEPS as TP_STEPS } from "./tp";
 import { STEPS as FSDP_TP_STEPS } from "./fsdp_tp";
 
 export const TOPICS = [
+  { id: "NONE", label: "No Parallelism", sub: "one device · baseline · per pseudocode line", steps: NO_PARALLELISM_STEPS },
   { id: "DP", label: "Data Parallel", sub: "replicated model · AllReduce", steps: DP_STEPS },
   { id: "ZERO1", label: "ZeRO-1", sub: "+ shard optimizer state", steps: ZERO1_STEPS },
   { id: "ZERO2", label: "ZeRO-2", sub: "+ shard gradients", steps: ZERO2_STEPS },
@@ -16,7 +18,7 @@ export const TOPICS = [
   { id: "FSDP_TP", label: "FSDP + TP", sub: "2D mesh (X, Y) · per pseudocode line", steps: FSDP_TP_STEPS },
 ];
 
-export const DEFAULT_TOPIC_ID = "DP";
+export const DEFAULT_TOPIC_ID = "NONE";
 
 export function resolveTopicId(id) {
   return TOPICS.some((t) => t.id === id) ? id : DEFAULT_TOPIC_ID;

@@ -23,8 +23,10 @@ function useArrowKeys(setStep, total) {
   }, [onKey]);
 }
 
+const FLOW_ROW_KINDS = new Set(["fsdp", "tp", "fsdp_tp", "no_parallelism"]);
+
 function DiagramFor({ diagram }) {
-  if (diagram.kind === "fsdp" || diagram.kind === "tp" || diagram.kind === "fsdp_tp") return <FSDPDiagram diagram={diagram} />;
+  if (FLOW_ROW_KINDS.has(diagram.kind)) return <FSDPDiagram diagram={diagram} />;
   return <DeviceDiagram diagram={diagram} />;
 }
 

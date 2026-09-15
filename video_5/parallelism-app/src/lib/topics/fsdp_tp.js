@@ -243,7 +243,7 @@ const RAW_STEPS = [
   {
     title: "Line 14 — AllGather In over Y (reused)",
     notation: "$In[B_X,D] = \\text{AllGather}_Y\\!\\left(In[B_X,D_Y]\\right)$",
-    body: "Not on the critical path this time — and this gather can be shared with the <i>next</i> layer's own line-1 AllGather of $In$, so it only ever gets paid for once. $Wout$ has dropped back to sharded.",
+    body: "Not on the critical path this time — and this gather can be shared with the <i>previous</i> layer's own forward-pass AllGather of $In$, so it only ever gets paid for once. $Wout$ has dropped back to sharded.",
     delta: { Wout: node("Wout[F_Y,D_X]", "ghost"), In: node("In[B_X,D]", "active"), dTmp: node("dTmp[B_X,F_Y]", "solid") },
     comm: { type: "allgather", targetId: "In", label: "$In[B_X,D] = \\text{AllGather}_Y(In[B_X,D_Y])$" },
     matrices: [
