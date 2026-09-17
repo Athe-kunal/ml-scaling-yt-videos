@@ -5,6 +5,9 @@ import DeviceDiagram from "./components/DeviceDiagram";
 import FSDPDiagram from "./components/FSDPDiagram";
 import MatrixShapes from "./components/MatrixShapes";
 import StepPanel from "./components/StepPanel";
+import FlopsCommsChart from "./components/FlopsCommsChart";
+
+const CUSTOM_PAGES = { "flops-comms": FlopsCommsChart };
 
 const ENV_TOPIC = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_TOPIC) || DEFAULT_TOPIC_ID;
 
@@ -35,9 +38,10 @@ export default function App() {
   const [step, setStep] = useState(0);
 
   const topic = useMemo(() => TOPICS.find((t) => t.id === topicId) || TOPICS[0], [topicId]);
-  const clampedStep = Math.min(step, topic.steps.length - 1);
-  const currentStep = topic.steps[clampedStep];
-  useArrowKeys(setStep, topic.steps.length);
+  const stepCount = topic.custom ? 0 : topic.steps.length;
+  const clampedStep = topic.custom ? 0 : Math.min(step, stepCount - 1);
+  const currentStep = topic.custom ? null : topic.steps[clampedStep];
+  useArrowKeys(setStep, stepCount || 1);
 
   function selectTopic(id) {
     setTopicId(id);
@@ -114,11 +118,18 @@ export default function App() {
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 18 }}>
-          <DiagramFor diagram={currentStep.diagram} />
-          {currentStep.matrices && <MatrixShapes items={currentStep.matrices} />}
-          <StepPanel steps={topic.steps} step={clampedStep} onStep={setStep} />
-        </div>
+        {topic.custom ? (
+          (() => {
+            const CustomPage = CUSTOM_PAGES[topic.custom];
+            return <CustomPage />;
+          })()
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 18 }}>
+            <DiagramFor diagram={currentStep.diagram} />
+            {currentStep.matrices && <MatrixShapes items={currentStep.matrices} />}
+            <StepPanel steps={topic.steps} step={clampedStep} onStep={setStep} />
+          </div>
+        )}
       </div>
     </div>
   );

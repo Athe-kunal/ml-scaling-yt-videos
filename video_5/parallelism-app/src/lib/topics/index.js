@@ -16,6 +16,7 @@ export const TOPICS = [
   { id: "FSDP", label: "FSDP", sub: "book notation · per pseudocode line", steps: FSDP_STEPS },
   { id: "TP", label: "Tensor Parallel", sub: "AllGather + ReduceScatter · per pseudocode line", steps: TP_STEPS },
   { id: "FSDP_TP", label: "FSDP + TP", sub: "2D mesh (X, Y) · per pseudocode line", steps: FSDP_TP_STEPS },
+  { id: "FLOPS_COMMS", label: "FLOPs vs Comms", sub: "mixed FSDP+TP · interactive chart", custom: "flops-comms" },
 ];
 
 export const DEFAULT_TOPIC_ID = "NONE";
