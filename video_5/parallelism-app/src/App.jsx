@@ -3,6 +3,7 @@ import { T, mono, sans, cond } from "./lib/theme";
 import { TOPICS, DEFAULT_TOPIC_ID, resolveTopicId } from "./lib/topics";
 import DeviceDiagram from "./components/DeviceDiagram";
 import FSDPDiagram from "./components/FSDPDiagram";
+import EmbedLookupDiagram from "./components/EmbedLookupDiagram";
 import MatrixShapes from "./components/MatrixShapes";
 import StepPanel from "./components/StepPanel";
 import FlopsCommsChart from "./components/FlopsCommsChart";
@@ -30,6 +31,7 @@ const FLOW_ROW_KINDS = new Set(["fsdp", "tp", "fsdp_tp", "no_parallelism"]);
 
 function DiagramFor({ diagram }) {
   if (FLOW_ROW_KINDS.has(diagram.kind)) return <FSDPDiagram diagram={diagram} />;
+  if (diagram.kind === "vpe") return <EmbedLookupDiagram diagram={diagram} />;
   return <DeviceDiagram diagram={diagram} />;
 }
 

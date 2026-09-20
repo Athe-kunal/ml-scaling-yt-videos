@@ -5,6 +5,7 @@ import { STEPS as ZERO2_STEPS } from "./zero2";
 import { STEPS as ZERO3_STEPS } from "./zero3";
 import { STEPS as FSDP_STEPS } from "./fsdp";
 import { STEPS as TP_STEPS } from "./tp";
+import { STEPS as VOCAB_EMBED_STEPS } from "./vocab_embed";
 import { STEPS as FSDP_TP_STEPS } from "./fsdp_tp";
 
 export const TOPICS = [
@@ -15,6 +16,7 @@ export const TOPICS = [
   { id: "ZERO3", label: "ZeRO-3", sub: "+ shard weights", steps: ZERO3_STEPS },
   { id: "FSDP", label: "FSDP", sub: "book notation · per pseudocode line", steps: FSDP_STEPS },
   { id: "TP", label: "Tensor Parallel", sub: "AllGather + ReduceScatter · per pseudocode line", steps: TP_STEPS },
+  { id: "VPE", label: "Vocab Parallel Embedding", sub: "row-sharded lookup table · AllReduce", steps: VOCAB_EMBED_STEPS },
   { id: "FSDP_TP", label: "FSDP + TP", sub: "2D mesh (X, Y) · per pseudocode line", steps: FSDP_TP_STEPS },
   { id: "FLOPS_COMMS", label: "FLOPs vs Comms", sub: "mixed FSDP+TP · interactive chart", custom: "flops-comms" },
 ];

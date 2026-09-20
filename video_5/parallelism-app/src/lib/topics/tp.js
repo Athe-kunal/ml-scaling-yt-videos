@@ -179,7 +179,8 @@ export const STEPS = [
     id: 6,
     title: "Line 5 — loss",
     notation: "$Loss[B] = \\ldots$",
-    body: "Forward pass complete — $Out[B,D_Y]$ is exactly the sharded resting state the next block (or the loss) expects as its own input. Backward now needs to produce $dWout[F_Y,D]$ and $dWin[D,F_Y]$.",
+    body:
+      "Forward pass complete — $Out[B,D_Y]$ is exactly the sharded resting state the next block (or the loss) expects as its own input. The book leaves this line as “…” deliberately: whatever the loss function actually does with $Out$ (e.g. gather it first, or reduce it as-is) is outside the scope of the parallelism strategy being illustrated here, so the shapes panel below shows $Loss[B]$ as an unspecified reduction rather than claiming a concrete shape. Backward now needs to produce $dWout[F_Y,D]$ and $dWin[D,F_Y]$.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -190,7 +191,7 @@ export const STEPS = [
     matrices: [
       mat("Out", "B", "D_Y", { shardAxis: "cols", tone: "act" }),
       op("→"),
-      mat("Loss", "B", "1", { tone: "act", state: "active" }),
+      mat("Loss", "B", "\\ldots", { tone: "act", state: "active" }),
     ],
   },
   {

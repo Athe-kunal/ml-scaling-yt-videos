@@ -189,8 +189,10 @@ export const STEPS = [
   {
     id: 9,
     title: "Line 8 — ReduceScatter dWout",
-    notation: "$dWout[F,D_X] = \\text{ReduceScatter}_X\\!\\left(dWout[F,D]^{\\{U_X\\}}\\right)$",
-    body: "Not on the critical path — this reduction can happen asynchronously, overlapped with the compute that follows. The result materializes only the shard this device owns, exactly like ZeRO-2/3's gradient sync.",
+    notation:
+      "$dWout[F,D_X] = \\text{ReduceScatter}_X\\!\\left(dWout[F,D]^{\\{U_X\\}}\\right) = \\dfrac{dWout^{(0)}[F,D] + dWout^{(1)}[F,D]}{X}$",
+    body:
+      "Not on the critical path — this reduction can happen asynchronously, overlapped with the compute that follows. Concretely, \"reduce\" here means each device's local partial is <i>summed</i> across all $X$ devices and divided by the world size $X$ — the same sum-then-average an AllReduce would compute. The \"scatter\" half is what's different: instead of handing that averaged result to <i>every</i> device, each device keeps only its own $D_X$ shard of it — exactly like ZeRO-2/3's gradient sync.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -200,7 +202,11 @@ export const STEPS = [
         dOut: node("dOut[B_X,D]", "solid"),
         dWout: node("dWout[F,D_X]", "active"),
       }),
-      { type: "reducescatter", targetId: "dWout", label: "$dWout[F,D_X] = \\text{ReduceScatter}_X(dWout[F,D]^{\\{U_X\\}})$" }
+      {
+        type: "reducescatter",
+        targetId: "dWout",
+        label: "$dWout[F,D_X] = \\text{ReduceScatter}_X(dWout[F,D]^{\\{U_X\\}}) = \\dfrac{dWout^{(0)}+dWout^{(1)}}{X}\\Big|_{D_X\\text{ shard}}$",
+      }
     ),
   },
   {
@@ -258,8 +264,10 @@ export const STEPS = [
   {
     id: 13,
     title: "Line 12 — ReduceScatter dWin",
-    notation: "$dWin[D_X,F] = \\text{ReduceScatter}_X\\!\\left(dWin[D,F]^{\\{U_X\\}}\\right)$",
-    body: "Same async, off-critical-path reduction as line 8, now for the other weight. This is the gradient this device will actually use to update its own $Win$ shard.",
+    notation:
+      "$dWin[D_X,F] = \\text{ReduceScatter}_X\\!\\left(dWin[D,F]^{\\{U_X\\}}\\right) = \\dfrac{dWin^{(0)}[D,F] + dWin^{(1)}[D,F]}{X}$",
+    body:
+      "Same async, off-critical-path reduction as line 8, now for the other weight — sum each device's local partial across all $X$ devices, divide by $X$ to average, then keep only this device's $D_X$ shard of the result. This is the gradient this device will actually use to update its own $Win$ shard.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -270,7 +278,11 @@ export const STEPS = [
         dTmp: node("dTmp[B_X,F]", "solid"),
         dWin: node("dWin[D_X,F]", "active"),
       }),
-      { type: "reducescatter", targetId: "dWin", label: "$dWin[D_X,F] = \\text{ReduceScatter}_X(dWin[D,F]^{\\{U_X\\}})$" }
+      {
+        type: "reducescatter",
+        targetId: "dWin",
+        label: "$dWin[D_X,F] = \\text{ReduceScatter}_X(dWin[D,F]^{\\{U_X\\}}) = \\dfrac{dWin^{(0)}+dWin^{(1)}}{X}\\Big|_{D_X\\text{ shard}}$",
+      }
     ),
   },
   {

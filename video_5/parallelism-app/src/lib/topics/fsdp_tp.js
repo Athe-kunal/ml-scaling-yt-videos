@@ -168,7 +168,7 @@ const RAW_STEPS = [
     matrices: [
       mat("Out", "B_X", "D_Y", { shardAxis: "cols", tone: "act" }),
       op("→"),
-      mat("Loss", "B_X", "1", { tone: "act", state: "active" }),
+      mat("Loss", "B_X", "\\ldots", { tone: "act", state: "active" }),
     ],
   },
   {

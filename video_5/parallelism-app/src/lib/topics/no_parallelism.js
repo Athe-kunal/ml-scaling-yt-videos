@@ -98,7 +98,7 @@ const RAW_STEPS = [
     notation: "$Loss[B] = \\ldots$",
     body: "Forward pass complete. Backward now needs to produce $dWout[F,D]$ and $dWin[D,F]$ — full, unsharded gradients, since nothing was ever split in the first place.",
     delta: { Out: node("Out[B,D]", "solid"), Loss: node("Loss[B]", "active") },
-    matrices: [mat("Out", "B", "D"), op("→"), mat("Loss", "B", "1", { state: "active" })],
+    matrices: [mat("Out", "B", "D"), op("→"), mat("Loss", "B", "\\ldots", { state: "active" })],
   },
   {
     title: "Line 4 — dOut",
