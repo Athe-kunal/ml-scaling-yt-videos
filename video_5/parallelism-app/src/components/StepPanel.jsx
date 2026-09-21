@@ -108,6 +108,51 @@ export default function StepPanel({ steps, step, onStep }) {
         dangerouslySetInnerHTML={{ __html: withInlineMath(s.notation) }}
       />
 
+      {(s.flops || s.comms) && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {s.flops && (
+            <div
+              style={{
+                flex: "1 1 200px",
+                fontSize: 12.5,
+                lineHeight: 1.6,
+                color: T.accent,
+                background: `${T.accent}0f`,
+                border: `1px solid ${T.accent}40`,
+                borderRadius: 8,
+                padding: "7px 10px",
+                overflowX: "auto",
+              }}
+            >
+              <span style={{ fontFamily: mono, fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", opacity: 0.85, marginRight: 8 }}>
+                FLOPs
+              </span>
+              <span dangerouslySetInnerHTML={{ __html: withInlineMath(s.flops) }} />
+            </div>
+          )}
+          {s.comms && (
+            <div
+              style={{
+                flex: "1 1 200px",
+                fontSize: 12.5,
+                lineHeight: 1.6,
+                color: T.wire,
+                background: `${T.wire}0f`,
+                border: `1px solid ${T.wire}40`,
+                borderRadius: 8,
+                padding: "7px 10px",
+                overflowX: "auto",
+              }}
+            >
+              <span style={{ fontFamily: mono, fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", opacity: 0.85, marginRight: 8 }}>
+                Comms
+              </span>
+              <span dangerouslySetInnerHTML={{ __html: withInlineMath(s.comms) }} />
+            </div>
+          )}
+        </div>
+      )}
+
       <div
         style={{ fontFamily: sans, fontSize: 13.5, lineHeight: 1.55, color: T.soft, marginBottom: s.note || s.formula ? 12 : 0 }}
         dangerouslySetInnerHTML={{ __html: withInlineMath(s.body) }}

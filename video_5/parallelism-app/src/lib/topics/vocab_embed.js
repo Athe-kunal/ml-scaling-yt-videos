@@ -107,10 +107,12 @@ export const STEPS = [
     id: 8,
     title: "AllReduce combines the two masked partials",
     notation: "$Emb(X) = \\text{AllReduce}([20,0,30,0],\\,[0,50,0,60]) = [20,50,30,60]$",
+    comms:
+      "in the real (non-toy) setting each looked-up row is a $D$-wide embedding vector, not a scalar: $Emb(X) \\in [B,D]$, so this AllReduce costs $4BD$ bytes — same $\\approx\\!2\\times$-array-size rule as any other AllReduce",
     body:
-      "Because the two masked partials are zero exactly where the other is nonzero, summing them elementwise reconstructs the correct lookup for every token — matching the target from step 1.",
+      "Because the two masked partials are zero exactly where the other is nonzero, summing them elementwise reconstructs the correct lookup for every token — matching the target $Emb(X) = [20,50,30,60]$ that the setup step posed as the goal (for $X=[1,4,2,5]$).",
     note:
-      "Unlike the MLP and attention blocks (which need an AllGather <i>and</i> a ReduceScatter on the activation), a vocab-parallel embedding needs just one AllReduce, on the output of the lookup — and its backward pass is free: every table row belongs to exactly one GPU, so the gradient update is a local scatter-add with no communication at all.",
+      "Unlike the MLP and attention blocks (which need an AllGather <i>and</i> a ReduceScatter on the activation), a vocab-parallel embedding needs just one AllReduce, on the output of the lookup — and its backward pass is free: every table row belongs to exactly one GPU, so the gradient update is a local scatter-add with no communication at all. There's no FLOPs line for this topic at all: a lookup is a gather + a mask, not a matmul — so $T_{\\text{math}}\\approx 0$ and this is comms-bound by construction; the interesting cost here is entirely $T_{\\text{comms}} = \\dfrac{4BD}{W_{ici}}$.",
     diagram: vpe(
       [
         row("masked (GPU1)", [cell(20, "gpu1"), cell(0, "gpu1", true), cell(30, "gpu1"), cell(0, "gpu1", true)]),

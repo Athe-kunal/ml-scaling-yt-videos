@@ -45,6 +45,7 @@ export const STEPS = [
     id: 2,
     title: "Forward pass — no communication",
     notation: "$In[B_X,D] \\cdot_D Win[D,F] \\to Tmp[B_X,F] \\cdot_F Wout[F,D] \\to Out[B_X,D]$",
+    flops: "$2B_XDF + 2B_XFD = 4B_XDF$",
     body: "Unchanged — every device still has every weight, so the forward pass is identical to plain DP and ZeRO-1.",
     diagram: {
       devices: [
@@ -58,6 +59,7 @@ export const STEPS = [
     id: 3,
     title: "Backward pass — still fully local",
     notation: "$dWin^{(X)}[D,F]$ and $dWout^{(X)}[F,D]$ both computed on every $X$",
+    flops: "4 matmuls ($dWout,dTmp,dWin,dIn$) $= 8B_XDF$ — same redundant compute as DP/ZeRO-1",
     body: "Backprop still has to touch both weights locally — they're replicated, so there's no way around computing a local gradient for each one. The saving happens in the next step, not this one.",
     diagram: {
       devices: [
@@ -71,6 +73,7 @@ export const STEPS = [
     id: 4,
     title: "ReduceScatter — sync gradients, keep only your shard",
     notation: "$dW = \\text{ReduceScatter}_X(dW^{(0)}, dW^{(1)})$,  materializes only on $\\text{owner}(W)$",
+    comms: "$2DF + 2FD = 4DF$ bytes — a ReduceScatter costs $\\approx 1\\times$ each array's bytes, half of an AllReduce",
     body: "Instead of an AllReduce, a ReduceScatter combines the gradients but only <i>materializes</i> the result on the device that owns that weight's optimizer state. Device 0 ends up with synced $dWin$ only; device 1 with $dWout$ only.",
     diagram: {
       devices: [
@@ -116,6 +119,7 @@ export const STEPS = [
     id: 6,
     title: "AllGather — re-sync the weights",
     notation: "$Win, Wout = \\text{AllGather}_X\\!\\left(W^{\\text{owner}(W)}\\right)$",
+    comms: "$2DF + 2FD = 4DF$ bytes",
     body: "Same weight re-sync as ZeRO-1: each device broadcasts the weight it just updated. Both end up with the full updated pair again.",
     note:
       "No more redundant gradients, and ReduceScatter has less communication overhead than AllReduce — the FSDP framing: each backward-pass AllReduce becomes an AllGather + a ReduceScatter, at equivalent total bytes moved but without the wasted local copies.",
@@ -125,6 +129,25 @@ export const STEPS = [
         device("mb2", "In[B₁,D]", ALL, WPRIME, D1_GRAD_OWNED, GSYNC, D1_OWNS),
       ],
       comm: { type: "allgather", label: "$Win, Wout = \\text{AllGather}_X\\!\\left(W^{\\text{owner}(W)}\\right)$" },
+    },
+  },
+  {
+    id: 7,
+    title: "Compute vs. communication",
+    notation: "$T_{\\text{math}} = \\dfrac{8BDF}{XC} \\qquad T_{\\text{comms}} = \\dfrac{4DF + 4DF}{W_{ici}} = \\dfrac{8DF}{W_{ici}}$",
+    flops: "backward pass only, same as plain DP: $8B_XDF$ (4 matmuls)",
+    comms: "the gradient ReduceScatter ($4DF$) $+$ the post-update weight AllGather ($4DF$) $= 8DF$ bytes",
+    body:
+      "Same total bytes moved as plain DP's two AllReduces — ZeRO-2 just spends them more honestly: a ReduceScatter instead of an AllReduce means no device ever holds a synced gradient it can't use, at the same total bandwidth cost DP already pays. This is exactly the book's own argument: an AllReduce decomposes into a ReduceScatter and an AllGather of equal cost, so swapping one AllReduce for a ReduceScatter-then-AllGather pair moves the identical number of bytes.",
+    note:
+      "Compute-bound ($T_{\\text{math}} > T_{\\text{comms}}$) when $\\dfrac{B}{X} > \\dfrac{C}{W_{ici}}$ — identical threshold to plain DP, matching the book's claim that DP and ZeRO-2/3 “have the same communication cost.”",
+    formula: "$\\text{compute-bound} \\iff \\dfrac{B}{X} > \\dfrac{C}{W_{ici}}$",
+    diagram: {
+      devices: [
+        device("mb1", "In[B₀,D]", ALL, WPRIME, D0_GRAD_OWNED, GSYNC, D0_OWNS),
+        device("mb2", "In[B₁,D]", ALL, WPRIME, D1_GRAD_OWNED, GSYNC, D1_OWNS),
+      ],
+      comm: null,
     },
   },
 ];

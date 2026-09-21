@@ -41,7 +41,7 @@ function snapshot(overrides) {
   return { ...base, ...overrides };
 }
 
-// Once the forward pass has finished (step 6 onward), In/Tmp/Out/Loss
+// Once the forward pass has finished (the dOut step onward), In/Tmp/Out/Loss
 // never change state again — folded into every backward-step snapshot
 // below so stepping through the backward pass doesn't make the completed
 // forward blocks vanish. (Win/Wout are intentionally excluded: they
@@ -80,6 +80,7 @@ export const STEPS = [
     id: 2,
     title: "Line 1 — AllGather Win",
     notation: "$Win[D,F] = \\text{AllGather}_X\\!\\left(Win[D_X,F]\\right)$",
+    comms: "$2DF$ bytes — an AllGather costs $\\approx 1\\times$ the gathered array's bytes",
     body: "Not on the critical path — this AllGather can be prefetched during the <i>previous</i> layer's compute, so by the time this layer needs $Win$, it's already there.",
     diagram: diagramFrom(
       snapshot({
@@ -94,6 +95,7 @@ export const STEPS = [
     id: 3,
     title: "Line 2 — column matmul",
     notation: "$Tmp[B_X,F] = In[B_X,D] \\cdot_D Win[D,F]$",
+    flops: "$2B_XDF$",
     body: "Both operands are already local — $In$ was replicated, $Win$ was just gathered — so this matmul needs no communication. $Win[D,F]$ can be thrown away right after; it isn't needed again until the backward pass.",
     diagram: diagramFrom(
       snapshot({
@@ -109,7 +111,8 @@ export const STEPS = [
     id: 4,
     title: "Line 3 — AllGather Wout",
     notation: "$Wout[F,D] = \\text{AllGather}_X\\!\\left(Wout[F,D_X]\\right)$",
-    body: "Same as step 2, one layer later: not on the critical path, prefetchable during the previous layer. $Win$ has already been dropped back to its sharded resting state.",
+    comms: "$2FD$ bytes",
+    body: "Same as the $Win$ AllGather earlier, one layer later: not on the critical path, prefetchable during the previous layer. $Win$ has already been dropped back to its sharded resting state.",
     diagram: diagramFrom(
       snapshot({
         In: node("In[B_X,D]", "solid"),
@@ -124,6 +127,7 @@ export const STEPS = [
     id: 5,
     title: "Line 4 — row matmul",
     notation: "$Out[B_X,D] = Tmp[B_X,F] \\cdot_F Wout[F,D]$",
+    flops: "$2B_XFD$",
     body: "Again both operands are local, so no communication. This finishes the block's output.",
     diagram: diagramFrom(
       snapshot({
@@ -173,6 +177,7 @@ export const STEPS = [
     id: 8,
     title: "Line 7 — local, unreduced dWout",
     notation: "$dWout[F,D]^{\\{U_X\\}} = Tmp[B_X,F] \\cdot_B dOut[B_X,D]$",
+    flops: "$2B_XFD$",
     body: "Each device computes its own local contribution toward $dWout$ — but it's only a partial sum over this device's batch shard, tagged $\\{U_X\\}$ for “unreduced along $X$.” It isn't the real gradient until it's combined with every other device's partial.",
     diagram: diagramFrom(
       snapshot({
@@ -191,6 +196,7 @@ export const STEPS = [
     title: "Line 8 — ReduceScatter dWout",
     notation:
       "$dWout[F,D_X] = \\text{ReduceScatter}_X\\!\\left(dWout[F,D]^{\\{U_X\\}}\\right) = \\dfrac{dWout^{(0)}[F,D] + dWout^{(1)}[F,D]}{X}$",
+    comms: "$2FD$ bytes — a ReduceScatter costs $\\approx 1\\times$ the pre-scatter array's bytes",
     body:
       "Not on the critical path — this reduction can happen asynchronously, overlapped with the compute that follows. Concretely, \"reduce\" here means each device's local partial is <i>summed</i> across all $X$ devices and divided by the world size $X$ — the same sum-then-average an AllReduce would compute. The \"scatter\" half is what's different: instead of handing that averaged result to <i>every</i> device, each device keeps only its own $D_X$ shard of it — exactly like ZeRO-2/3's gradient sync.",
     diagram: diagramFrom(
@@ -213,6 +219,7 @@ export const STEPS = [
     id: 10,
     title: "Line 9 — AllGather Wout (again)",
     notation: "$Wout[F,D] = \\text{AllGather}_X\\!\\left(Wout[F,D_X]\\right)$",
+    comms: "$2FD$ bytes",
     body: "Can be done ahead of time. Same weight as the forward pass — gathered a second time, because the backward pass needs it too, for the very next line.",
     diagram: diagramFrom(
       snapshot({
@@ -230,6 +237,7 @@ export const STEPS = [
     id: 11,
     title: "Line 10 — dTmp",
     notation: "$dTmp[B_X,F] = dOut[B_X,D] \\cdot_D Wout[F,D]$",
+    flops: "$2B_XDF$",
     body: "Local matmul, no communication. $Wout[F,D]$ can be thrown away right after — it won't be needed again until the next layer's backward pass.",
     diagram: diagramFrom(
       snapshot({
@@ -247,7 +255,8 @@ export const STEPS = [
     id: 12,
     title: "Line 11 — local, unreduced dWin",
     notation: "$dWin[D,F]^{\\{U_X\\}} = In[B_X,D] \\cdot_B dTmp[B_X,F]$",
-    body: "Mirrors line 7: each device's own local, not-yet-reduced contribution toward $dWin$, tagged $\\{U_X\\}$. $Wout$ has already been dropped back to sharded.",
+    flops: "$2B_XDF$",
+    body: "Mirrors the earlier local, unreduced $dWout$ computation: each device's own local, not-yet-reduced contribution toward $dWin$, tagged $\\{U_X\\}$. $Wout$ has already been dropped back to sharded.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -266,8 +275,9 @@ export const STEPS = [
     title: "Line 12 — ReduceScatter dWin",
     notation:
       "$dWin[D_X,F] = \\text{ReduceScatter}_X\\!\\left(dWin[D,F]^{\\{U_X\\}}\\right) = \\dfrac{dWin^{(0)}[D,F] + dWin^{(1)}[D,F]}{X}$",
+    comms: "$2DF$ bytes",
     body:
-      "Same async, off-critical-path reduction as line 8, now for the other weight — sum each device's local partial across all $X$ devices, divide by $X$ to average, then keep only this device's $D_X$ shard of the result. This is the gradient this device will actually use to update its own $Win$ shard.",
+      "Same async, off-critical-path reduction as the $dWout$ ReduceScatter, now for the other weight — sum each device's local partial across all $X$ devices, divide by $X$ to average, then keep only this device's $D_X$ shard of the result. This is the gradient this device will actually use to update its own $Win$ shard.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -289,6 +299,7 @@ export const STEPS = [
     id: 14,
     title: "Line 13 — AllGather Win (again)",
     notation: "$Win[D,F] = \\text{AllGather}_X\\!\\left(Win[D_X,F]\\right)$",
+    comms: "$2DF$ bytes",
     body: "Can be done ahead of time. One last full gather of $Win$ — needed for the final line, which passes the gradient on to the previous layer.",
     diagram: diagramFrom(
       snapshot({
@@ -307,6 +318,7 @@ export const STEPS = [
     id: 15,
     title: "Line 14 — dIn",
     notation: "$dIn[B_X,D] = dTmp[B_X,F] \\cdot_F Win[D,F]$",
+    flops: "$2B_XFD$",
     body: "Local matmul closes out the block. $dIn$ is what the <i>previous</i> layer's backward pass needs — this is exactly why $Win$ had to be re-gathered one more time. $Win[D,F]$ can be thrown away here too, dropping back to its sharded resting state.",
     diagram: diagramFrom(
       snapshot({
@@ -317,6 +329,30 @@ export const STEPS = [
         dTmp: node("dTmp[B_X,F]", "solid"),
         dWin: node("dWin[D_X,F]", "solid"),
         dIn: node("dIn[B_X,D]", "active"),
+      }),
+      null
+    ),
+  },
+  {
+    id: 16,
+    title: "Compute vs. communication",
+    notation: "$T_{\\text{math}} = \\dfrac{2\\cdot2\\cdot B_XDF}{C} = \\dfrac{4BDF}{XC} \\qquad T_{\\text{comms}} = \\dfrac{2\\cdot2\\cdot DF}{W_{ici}} = \\dfrac{4DF}{W_{ici}}$",
+    flops: "the book models the forward pass only (2 matmuls, $4B_XDF$) — it has “the same FLOPs-to-comms ratio as the backward pass,” so either suffices",
+    comms: "forward pass only: the $Win$ AllGather ($2DF$) $+$ the $Wout$ AllGather ($2FD$) $= 4DF$ bytes",
+    body:
+      "Matches the book's own derivation exactly: modeling just the forward pass (the $Win$ AllGather + the $Wout$ AllGather, $4DF$ bytes, against $4B_XDF$ FLOPs) gives <i>the same ratio</i> as plain DP's backward-pass comparison — so FSDP reaches the identical compute-bound threshold, at zero extra risk of becoming comms-bound.",
+    note:
+      "Compute-bound ($T_{\\text{math}} > T_{\\text{comms}}$) when $\\dfrac{B}{X} > \\dfrac{C}{W_{ici}}$ — identical to plain DP, per the book: “Since all have the same communication cost, we can basically always do ZeRO-3 sharding.” This is about the <i>ratio</i>, not the total: summed over the whole step (2 fwd AllGathers $+$ 2 bwd AllGathers $+$ 2 ReduceScatters $= 12DF$), FSDP does move $1.5\\times$ DP's $8DF$ — the book calls this out too (“FSDP adds communication in the forward pass that pure DP doesn't have, but... it should have no effect on the comms roofline”), since that extra $4DF$ rides entirely on the forward pass's own otherwise-idle bandwidth.",
+    formula: "$\\text{compute-bound} \\iff \\dfrac{B}{X} > \\dfrac{C}{W_{ici}}$",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        Win: node("Win[D_X,F]", "ghost"),
+        dOut: node("dOut[B_X,D]", "solid"),
+        dWout: node("dWout[F,D_X]", "solid"),
+        dTmp: node("dTmp[B_X,F]", "solid"),
+        dWin: node("dWin[D_X,F]", "solid"),
+        dIn: node("dIn[B_X,D]", "solid"),
       }),
       null
     ),

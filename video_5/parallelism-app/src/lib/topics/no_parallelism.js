@@ -12,6 +12,13 @@
 // pattern as fsdp_tp.js: each RAW_STEP only lists what that line
 // changes, so a box already drawn never has to be re-listed just to
 // keep it from vanishing.
+//
+// Every matmul line carries a `flops` field (raw FLOP count, $2\times$
+// rows$\times$contracted$\times$cols — the standard multiply-add count),
+// same convention as dp.js. There's no `comms` anywhere in this file:
+// single device, nothing ever leaves it. A final, non-pseudocode summary
+// step totals everything into $T_{\text{math}}$ / $T_{\text{comms}}$,
+// matching dp.js's own closing step.
 
 function node(label, state) {
   return { label, state };
@@ -71,6 +78,7 @@ const RAW_STEPS = [
     title: "Line 1 — column matmul",
     notation: "$Tmp[B,F] = In[B,D] \\cdot_D Win[D,F]$",
     body: "A single local matmul — no gathering, no scattering, nothing to synchronize. Contract over $D$ to produce $Tmp[B,F]$.",
+    flops: "$2 \\cdot B \\cdot D \\cdot F$ — one matmul, $2\\times(\\text{rows}\\times\\text{contracted}\\times\\text{cols})$",
     delta: { Tmp: node("Tmp[B,F]", "active") },
     matrices: [
       mat("In", "B", "D"),
@@ -84,6 +92,7 @@ const RAW_STEPS = [
     title: "Line 2 — row matmul",
     notation: "$Out[B,D] = Tmp[B,F] \\cdot_F Wout[F,D]$",
     body: "Another single local matmul, contracting over $F$ this time. Unlike TP's row-parallel matmul, there's no partial sum here — $F$ isn't split across anything, so the result is already the complete, correct $Out[B,D]$.",
+    flops: "$2 \\cdot B \\cdot F \\cdot D$",
     delta: { Tmp: node("Tmp[B,F]", "solid"), Out: node("Out[B,D]", "active") },
     matrices: [
       mat("Tmp", "B", "F"),
@@ -111,6 +120,7 @@ const RAW_STEPS = [
     title: "Line 5 — dWout",
     notation: "$dWout[F,D] = Tmp[B,F] \\cdot_B dOut[B,D]$",
     body: "Contract over the batch dimension $B$ to get the full weight gradient in one step — no partial sum, no reduction, because $B$ was never split across devices in the first place.",
+    flops: "$2 \\cdot F \\cdot B \\cdot D$",
     delta: { dOut: node("dOut[B,D]", "solid"), dWout: node("dWout[F,D]", "active") },
     matrices: [
       mat("Tmp", "B", "F"),
@@ -124,6 +134,7 @@ const RAW_STEPS = [
     title: "Line 6 — dTmp",
     notation: "$dTmp[B,F] = dOut[B,D] \\cdot_D Wout[F,D]$",
     body: "Contract over $D$ to propagate the gradient back through $Wout$. $dOut[B,D]$ isn't needed again after this.",
+    flops: "$2 \\cdot B \\cdot D \\cdot F$",
     delta: { dWout: node("dWout[F,D]", "solid"), dTmp: node("dTmp[B,F]", "active") },
     matrices: [
       mat("dOut", "B", "D", { tone: "grad" }),
@@ -136,7 +147,8 @@ const RAW_STEPS = [
   {
     title: "Line 7 — dWin",
     notation: "$dWin[D,F] = In[B,D] \\cdot_B dTmp[B,F]$",
-    body: "Contract over $B$ again, mirroring line 5, to get the other weight's full gradient — again, no partial sum needed.",
+    body: "Contract over $B$ again, mirroring the earlier $dWout[F,D]$ computation, to get the other weight's full gradient — again, no partial sum needed.",
+    flops: "$2 \\cdot D \\cdot B \\cdot F$",
     delta: { dTmp: node("dTmp[B,F]", "solid"), dWin: node("dWin[D,F]", "active") },
     matrices: [
       mat("In", "B", "D"),
@@ -150,6 +162,7 @@ const RAW_STEPS = [
     title: "Line 8 — dIn",
     notation: "$dIn[B,D] = dTmp[B,F] \\cdot_F Win[D,F]$",
     body: "Contract over $F$ to close out the block — a single local matmul, no partial sum, no ReduceScatter. This is exactly what the <i>previous</i> layer's backward pass needs. Compare this whole walkthrough to TP: there, this same line only produces a partial $dIn^{\\{U_Y\\}}$ that then needs a ReduceScatter — here, it's just the answer.",
+    flops: "$2 \\cdot B \\cdot F \\cdot D$",
     delta: { dIn: node("dIn[B,D]", "active") },
     matrices: [
       mat("dTmp", "B", "F", { tone: "grad" }),
@@ -157,6 +170,18 @@ const RAW_STEPS = [
       mat("Win", "D", "F", { tone: "weight" }),
       op("="),
       mat("dIn", "B", "D", { tone: "grad", state: "active" }),
+    ],
+  },
+  {
+    title: "Compute vs. communication",
+    notation: "$T_{\\text{comms}} = 0 \\qquad T_{\\text{math}} = \\dfrac{12\\,B\\,D\\,F}{C}$",
+    body:
+      "Add up every $FLOPs$ line above: 6 matmuls (the forward pass's 2, the backward pass's 4) × $2BDF$ each = $12BDF$ total — matching the standard “$6\\times\\text{params}$” FLOPs convention, since $\\text{params}=2DF$ for this block.",
+    note: "There's no comms line to add, because there's no second device to talk to. Every later topic in this app is this same picture with one piece sharded away — and paying a communication cost to get it back.",
+    delta: {},
+    matrices: [
+      mat("Win", "D", "F", { tone: "weight" }),
+      mat("Wout", "F", "D", { tone: "weight" }),
     ],
   },
 ];
@@ -170,6 +195,8 @@ export const STEPS = RAW_STEPS.map((s, i) => {
     notation: s.notation,
     body: s.body,
     note: s.note,
+    flops: s.flops,
+    comms: s.comms,
     diagram: diagramFrom(runningState),
     matrices: s.matrices,
   };

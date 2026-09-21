@@ -57,7 +57,7 @@ function op(symbol, opts = {}) {
   return { op: symbol, ...opts };
 }
 
-// Once the forward pass has finished (step 6 onward), none of Win/Tmp/
+// Once the forward pass has finished (the dOut step onward), none of Win/Tmp/
 // Wout/Out/Loss ever change state again — unlike FSDP, TP's weights never
 // move, so nothing needs to drop back to "ghost". Folded into every
 // backward-step snapshot below so stepping through the backward pass
@@ -96,6 +96,7 @@ export const STEPS = [
     id: 2,
     title: "Line 1 — AllGather In",
     notation: "$In[B,D] = \\text{AllGather}_Y\\!\\left(In[B,D_Y]\\right)$",
+    comms: "$2BD$ bytes — an AllGather costs $\\approx 1\\times$ the gathered array's bytes",
     body: "On the critical path — unlike FSDP's weight AllGathers, this can't be prefetched during a previous step: the block's first matmul can't start until the full activation is in hand. Every device ends this step holding the same, fully replicated $In[B,D]$.",
     diagram: diagramFrom(
       snapshot({
@@ -115,6 +116,7 @@ export const STEPS = [
     id: 3,
     title: "Line 2 — column matmul",
     notation: "$Tmp[B,F_Y] = In[B,D] \\cdot_D Win[D,F_Y]$",
+    flops: "$2BDF_Y$ — the mesh axis $Y$ already divides $F$ down, so no extra $/Y$ needed here",
     body: "The contracting dimension $D$ isn't sharded — only $F$ is, via $Win$ — so this matmul needs zero communication. Each device produces its own $F_Y$ shard of $Tmp$.",
     diagram: diagramFrom(
       snapshot({
@@ -137,6 +139,7 @@ export const STEPS = [
     id: 4,
     title: "Line 3 — row matmul, unreduced",
     notation: "$Out[B,D]^{\\{U_Y\\}} = Tmp[B,F_Y] \\cdot_F Wout[F_Y,D]$",
+    flops: "$2BF_YD$",
     body: "Now $F$ is the contracting dimension and it <i>is</i> sharded, so each device only computes a partial contribution — tagged $\\{U_Y\\}$ for “unreduced along $Y$”: the right shape, but the wrong (incomplete) value until every device's partial is combined.",
     diagram: diagramFrom(
       snapshot({
@@ -159,6 +162,7 @@ export const STEPS = [
     id: 5,
     title: "Line 4 — ReduceScatter Out",
     notation: "$Out[B,D_Y] = \\text{ReduceScatter}_Y\\!\\left(Out[B,D]^{\\{U_Y\\}}\\right)$",
+    comms: "$2BD$ bytes — a ReduceScatter costs $\\approx 1\\times$ the pre-scatter array's bytes",
     body: "On the critical path — this single collective both sums the partial output across $Y$ and re-shards it along $D$ in the same step, so the block ends exactly like it started: sharded, never fully materialized on one device. An AllReduce is exactly an AllGather followed by a ReduceScatter — splitting the block's two ends like this is what lets each half overlap with a neighboring block's compute.",
     diagram: diagramFrom(
       snapshot({
@@ -214,7 +218,8 @@ export const STEPS = [
     id: 8,
     title: "Line 7 — AllGather dOut",
     notation: "$dOut[B,D] = \\text{AllGather}_Y\\!\\left(dOut[B,D_Y]\\right)$",
-    body: "On the critical path — mirrors line 1 exactly, but for the gradient: $dOut$ must be fully replicated along $D$ before it can be contracted against $Wout$'s replicated $D$ side.",
+    comms: "$2BD$ bytes",
+    body: "On the critical path — mirrors the $In$ AllGather exactly, but for the gradient: $dOut$ must be fully replicated along $D$ before it can be contracted against $Wout$'s replicated $D$ side.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -234,6 +239,7 @@ export const STEPS = [
     id: 9,
     title: "Line 8 — dWout, local",
     notation: "$dWout[F_Y,D] = Tmp[B,F_Y] \\cdot_B dOut[B,D]$",
+    flops: "$2BF_YD$",
     body: "Contract over the batch dimension $B$. $Tmp$'s shard and the now-gathered $dOut$ are both already local — this weight gradient is a pure local matmul, no communication needed.",
     diagram: diagramFrom(
       snapshot({
@@ -257,6 +263,7 @@ export const STEPS = [
     id: 10,
     title: "Line 9 — dTmp, local",
     notation: "$dTmp[B,F_Y] = dOut[B,D] \\cdot_D Wout[F_Y,D]$",
+    flops: "$2BDF_Y$",
     body: "Contract over $D$, fully replicated on both operands — local, no communication. $dOut[B,D]$ can be thrown away right after this; it isn't needed again.",
     diagram: diagramFrom(
       snapshot({
@@ -281,8 +288,9 @@ export const STEPS = [
     id: 11,
     title: "Line 10 — AllGather In (reused)",
     notation: "$In[B,D] = \\text{AllGather}_Y\\!\\left(In[B,D_Y]\\right)$",
-    body: "The column-parallel weight's gradient needs the same fully-gathered $In[B,D]$ the forward pass produced back in line 1.",
-    note: "This can be skipped entirely by simply keeping (or re-checkpointing) line 1's result instead of paying for the same AllGather twice — the book calls this out as a direct saving.",
+    comms: "$2BD$ bytes if actually re-paid — but see note",
+    body: "The column-parallel weight's gradient needs the same fully-gathered $In[B,D]$ the forward pass produced back at the $In$ AllGather.",
+    note: "This can be skipped entirely by simply keeping (or re-checkpointing) that earlier $In$ AllGather's result instead of paying for the same AllGather twice — the book calls this out as a direct saving. That's the $2BD$ this topic's final Tcomms total assumes is <i>not</i> repaid.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -303,7 +311,8 @@ export const STEPS = [
     id: 12,
     title: "Line 11 — dWin, local",
     notation: "$dWin[D,F_Y] = In[B,D] \\cdot_B dTmp[B,F_Y]$",
-    body: "Contract over batch $B$ again — both operands local, no communication, exactly mirroring $dWout$'s derivation in line 8.",
+    flops: "$2BDF_Y$",
+    body: "Contract over batch $B$ again — both operands local, no communication, exactly mirroring $dWout$'s local derivation.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -326,7 +335,8 @@ export const STEPS = [
     id: 13,
     title: "Line 12 — dIn, unreduced",
     notation: "$dIn[B,D]^{\\{U_Y\\}} = dTmp[B,F_Y] \\cdot_F Win[D,F_Y]$",
-    body: "Contract over the sharded $F_Y$ — each device produces only a partial contribution, tagged $\\{U_Y\\}$, mirroring line 3 exactly. This is the gradient the <i>previous</i> layer needs.",
+    flops: "$2BF_YD$",
+    body: "Contract over the sharded $F_Y$ — each device produces only a partial contribution, tagged $\\{U_Y\\}$, mirroring the row matmul's unreduced output exactly. This is the gradient the <i>previous</i> layer needs.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -350,7 +360,8 @@ export const STEPS = [
     id: 14,
     title: "Line 13 — ReduceScatter dIn",
     notation: "$dIn[B,D_Y] = \\text{ReduceScatter}_Y\\!\\left(dIn[B,D]^{\\{U_Y\\}}\\right)$",
-    body: "On the critical path — closes the block exactly like line 4 did for the forward pass: sum the partial gradient across $Y$ and re-shard along $D$, handing the previous layer a $dIn[B,D_Y]$ in the same sharded resting state its own forward output was in.",
+    comms: "$2BD$ bytes",
+    body: "On the critical path — closes the block exactly like the $Out$ ReduceScatter did for the forward pass: sum the partial gradient across $Y$ and re-shard along $D$, handing the previous layer a $dIn[B,D_Y]$ in the same sharded resting state its own forward output was in.",
     diagram: diagramFrom(
       snapshot({
         ...FWD_DONE,
@@ -367,5 +378,28 @@ export const STEPS = [
       op("→", { comm: "reducescatter" }),
       mat("dIn", "B", "D_Y", { shardAxis: "cols", tone: "grad", state: "active" }),
     ],
+  },
+  {
+    id: 15,
+    title: "Compute vs. communication",
+    notation: "$T_{\\text{math}} = \\dfrac{4BDF}{YC} \\qquad T_{\\text{comms}} = \\dfrac{2\\cdot2\\cdot BD}{W_{ici}} = \\dfrac{4BD}{W_{ici}}$",
+    flops: "the book models the forward pass only (2 matmuls, $4BDF_Y=\\dfrac{4BDF}{Y}$) — “the backwards pass is just the transpose of each operation here”",
+    comms: "forward pass only: the $In$ AllGather ($2BD$) $+$ the $Out$ ReduceScatter ($2BD$) $= 4BD$ bytes",
+    body:
+      "Matches the book's own derivation exactly, and it's the mirror image of DP's: DP shards the <b>batch</b> and divides FLOPs by $X$, moving <b>weight-sized</b> data ($DF$); TP shards the <b>feature width</b> $F$ and divides FLOPs by $Y$, moving <b>activation-sized</b> data ($BD$) instead — same $4\\times$/$4\\times$ shape, just which axis gets divided and which tensor moves has swapped.",
+    note:
+      "Compute-bound ($T_{\\text{math}} > T_{\\text{comms}}$) when $\\dfrac{F}{Y} > \\dfrac{C}{W_{ici}}$, i.e. $F > Y\\cdot\\dfrac{C}{W_{ici}}$ — the book's own stated result verbatim. Summed over the <i>whole</i> step (both passes, and assuming the second $In$ AllGather is reused rather than repaid) the total is $12BDF/Y$ FLOPs against $8BD$ comms bytes — same $4\\times$-per-pass shape doubled, so the ratio (and threshold) comes out identical either way.",
+    formula: "$\\text{compute-bound} \\iff F > Y\\cdot\\dfrac{C}{W_{ici}}$",
+    diagram: diagramFrom(
+      snapshot({
+        ...FWD_DONE,
+        dOut: node("dOut[B,D]", "solid"),
+        dWout: node("dWout[F_Y,D]", "solid"),
+        dTmp: node("dTmp[B,F_Y]", "solid"),
+        dWin: node("dWin[D,F_Y]", "solid"),
+        dIn: node("dIn[B,D_Y]", "solid"),
+      }),
+      null
+    ),
   },
 ];
