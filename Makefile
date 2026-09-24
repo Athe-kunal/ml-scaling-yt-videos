@@ -16,3 +16,13 @@ video5-install:
 
 video5:
 	cd $(VIDEO5_DIR) && VITE_TOPIC=$(NAME) npm run dev -- --port $(VIDEO5_PORT)
+
+.PHONY: video6 video6-install
+VIDEO6_DIR := video_6/inference-app
+VIDEO6_PORT ?= 5179
+
+video6-install:
+	cd $(VIDEO6_DIR) && npm install
+
+video6:
+	cd $(VIDEO6_DIR) && npm run dev -- --port $(VIDEO6_PORT)
