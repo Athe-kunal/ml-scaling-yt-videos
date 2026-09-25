@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { T, mono, sans } from "./theme";
 import { withInlineMath, katexHtml } from "./latex";
 import { StepTimeChart, ThroughputChart } from "./Charts";
+import AlgorithmSteps from "./AlgorithmSteps";
 
 // Interactive version of "Theoretical estimates for LLM latency and
 // throughput" (scaling-book, Inference chapter).
@@ -77,7 +78,7 @@ function Segmented({ options, value, onChange }) {
   );
 }
 
-export default function App() {
+function ThroughputPage() {
   const [mode, setMode] = useState("toy");
   const [logB, setLogB] = useState(1); // B = 10^logB
   const [toy, setToy] = useState(TOY);
@@ -308,6 +309,35 @@ function Stat({ label, value, sub, color }) {
       <div style={{ fontSize: 11.5, color: T.dim, fontFamily: mono, marginBottom: 4 }}>{label.toUpperCase()}</div>
       <div style={{ fontSize: 28, color, fontFamily: mono, lineHeight: 1.1 }}>{value}</div>
       <div style={{ fontSize: 11.5, color: T.dim, fontFamily: mono, marginTop: 3 }}>{sub}</div>
+    </div>
+  );
+}
+
+const VIEWS = [
+  { id: "throughput", label: "Step time & throughput", sub: "roofline · interactive chart" },
+  { id: "algo", label: "Sharded attention", sub: "full algorithm · per pseudocode line" },
+];
+
+export default function App() {
+  const [view, setView] = useState("throughput");
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg }}>
+      <nav style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "16px clamp(16px, 3vw, 40px) 0", maxWidth: 1320, margin: "0 auto" }}>
+        {VIEWS.map((v) => {
+          const active = v.id === view;
+          return (
+            <button
+              key={v.id} onClick={() => setView(v.id)}
+              style={{ fontFamily: mono, fontSize: 12, padding: "8px 14px", borderRadius: 8, textAlign: "left", cursor: "pointer",
+                border: `1px solid ${active ? T.accent : T.rule}`, background: active ? `${T.accent}18` : T.panel, color: active ? T.accent : T.soft }}
+            >
+              <div style={{ fontWeight: 700 }}>{v.label}</div>
+              <div style={{ fontSize: 9.5, opacity: 0.75, marginTop: 2, color: active ? T.accent : T.dim }}>{v.sub}</div>
+            </button>
+          );
+        })}
+      </nav>
+      {view === "algo" ? <AlgorithmSteps /> : <ThroughputPage />}
     </div>
   );
 }
