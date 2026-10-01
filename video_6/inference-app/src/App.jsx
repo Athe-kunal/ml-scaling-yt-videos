@@ -294,6 +294,20 @@ function ThroughputPage() {
               <Prose html="Bigger $F$: more weight bytes to amortize, so batching helps for longer. Longer $S$: each sequence's KV cache is bigger, so you hit the wall sooner. At $B=B^*$ you are at exactly half of max throughput; as $B\to\infty$ throughput caps at $W_{\text{hbm}}/C_{\text{kv}}$." />
             </div>
           </section>
+
+          {/* topology scaling */}
+          <section style={panel}>
+            <div style={h2}>Doubling the topology: a capacity bound on B, with precision</div>
+            <div style={{ display: "grid", gap: 8, color: T.soft, fontSize: 14.5, lineHeight: 1.6 }}>
+              <Prose html="Instead of the bandwidth roofline above, bound $B$ by HBM <b>capacity</b>: spread over $n$ chips, each with $H_{\text{chip}}$ bytes of HBM (16GB on a TPU v5e), the KV cache and the weights both have to fit. Writing precision explicitly as bytes/element — $b_{\text{param}}$ for weights (1 for int8, 2 for bf16) and $b_{\text{kv}}$ for the KV cache — the total footprint can't exceed $n\,H_{\text{chip}}$:" />
+              <Math_ display tex={"B\\,C_{\\text{kv}}\\,b_{\\text{kv}} + N_{\\text{params}}\\,b_{\\text{param}} \\;\\le\\; n\\,H_{\\text{chip}} \\quad\\Rightarrow\\quad B_{\\max}(n) = \\frac{n\\,H_{\\text{chip}} - N_{\\text{params}}\\,b_{\\text{param}}}{C_{\\text{kv}}\\,b_{\\text{kv}}}"} />
+              <Prose html="Plugging $B=B_{\max}$ into the memory-bound step time (dropping the compute term, i.e. assuming $2BP/(nC) \le P/(nW_{\text{hbm}})$) and using $B_{\max}C_{\text{kv}}b_{\text{kv}} + N_{\text{params}}b_{\text{param}} = n\,H_{\text{chip}}$ exactly at the cap:" />
+              <Math_ display tex={"T_{\\text{step}} \\le \\frac{B\\,C_{\\text{kv}}b_{\\text{kv}} + N_{\\text{params}}b_{\\text{param}}}{n\\,W_{\\text{hbm}}} \\quad\\Rightarrow\\quad \\text{Thr}_{\\max}(n) = \\frac{B_{\\max}(n)}{T_{\\text{step}}(B_{\\max})} \\le B_{\\max}(n)\\cdot\\frac{W_{\\text{hbm}}}{H_{\\text{chip}}}"} />
+              <Prose html="So peak throughput is set entirely by how $B_{\max}$ scales with $n$. Doubling the topology, $n\to 2n$:" />
+              <Math_ display tex={"B_{\\max}(2n) = \\frac{2n\\,H_{\\text{chip}} - N_{\\text{params}}b_{\\text{param}}}{C_{\\text{kv}}b_{\\text{kv}}} \\;>\\; 2\\,B_{\\max}(n)"} />
+              <Prose html="— strictly more than double, since the fixed parameter footprint $N_{\text{params}}b_{\text{param}}$ is the same constant being subtracted from a numerator that just doubled. Peak throughput therefore <b>more than doubles</b> too: doubling the chip count dilutes the fixed cost of just holding the weights in memory, freeing disproportionately more capacity for batch/KV cache. This super-linear effect shrinks as $n\to\infty$ (the fixed $N_{\text{params}}b_{\text{param}}$ term becomes negligible next to $n\,H_{\text{chip}}$), at which point $B_{\max}(n)/n \to H_{\text{chip}}/(C_{\text{kv}}b_{\text{kv}})$ and per-chip throughput saturates at $W_{\text{hbm}}/(C_{\text{kv}}b_{\text{kv}})$ — the same constant-per-chip-throughput regime the bandwidth roofline above converges to." />
+            </div>
+          </section>
         </main>
       </div>
     </div>
