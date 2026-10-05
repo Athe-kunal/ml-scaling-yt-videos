@@ -11,7 +11,9 @@ const BOX_W = 118;
 const BOX_H = 80;
 const LABEL_H = 22;
 
-const splits = (shard) => (shard === "YZ" ? 4 : shard ? 2 : 1);
+// A shard string is one or more axis letters (e.g. "Y", "YZ", "xyz"); any
+// multi-axis combo gets 4 bands (2x2), a single axis gets 2, unsharded is 1.
+const splits = (shard) => (shard && shard.length > 1 ? 4 : shard ? 2 : 1);
 
 function DimLabel({ d, style }) {
   return (
@@ -97,7 +99,7 @@ export default function MatrixShapes({ row, accent }) {
       </div>
       <div style={{ fontFamily: sans, fontSize: 11, color: T.dim, marginTop: 12, lineHeight: 1.6 }}>
         Matrix = last two dims. Extra leading dims show as stacked cards plus chips. Solid band = this chip's shard, hatched = other chips'.
-        Divider colour = shard axis (<span style={{ color: T.accent }}>Y</span> · <span style={{ color: T.accent2 }}>Z</span> · <span style={{ color: T.wire }}>YZ</span>).
+        Divider colour = shard axis, matching the subscript on each dimension's label.
         Dashed card with <span style={{ fontFamily: mono, color: T.bad }}>Σ</span> = unreduced partial sum.
       </div>
     </div>

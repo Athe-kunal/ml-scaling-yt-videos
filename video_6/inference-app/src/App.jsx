@@ -3,6 +3,8 @@ import { T, mono, sans } from "./theme";
 import { withInlineMath, katexHtml } from "./latex";
 import { StepTimeChart, ThroughputChart } from "./Charts";
 import AlgorithmSteps from "./AlgorithmSteps";
+import MLPWeightStationary from "./MLPWeightStationary";
+import SpeculativeDecoding from "./SpeculativeDecoding";
 
 // Interactive version of "Theoretical estimates for LLM latency and
 // throughput" (scaling-book, Inference chapter).
@@ -330,6 +332,8 @@ function Stat({ label, value, sub, color }) {
 const VIEWS = [
   { id: "throughput", label: "Step time & throughput", sub: "roofline · interactive chart" },
   { id: "algo", label: "Sharded attention", sub: "full algorithm · per pseudocode line" },
+  { id: "mlp", label: "MLP weight-stationary", sub: "1D vs 2D · step through each" },
+  { id: "specdecode", label: "Speculative decoding", sub: "draft, score, validate · random trials" },
 ];
 
 export default function App() {
@@ -351,7 +355,10 @@ export default function App() {
           );
         })}
       </nav>
-      {view === "algo" ? <AlgorithmSteps /> : <ThroughputPage />}
+      {view === "algo" ? <AlgorithmSteps />
+        : view === "mlp" ? <MLPWeightStationary />
+        : view === "specdecode" ? <SpeculativeDecoding />
+        : <ThroughputPage />}
     </div>
   );
 }
