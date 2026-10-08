@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { T, mono, sans } from "./theme";
 import { withInlineMath, katexHtml } from "./latex";
-import { DEV_COLORS, PHASE, STEP_PHASES, buildPhases, deviceStep, heldKV, inFlight, mod, sub, covered } from "./ringModel";
+import { DEV_COLORS, PHASE, STEP_PHASES, ownChunks, buildPhases, deviceStep, heldKV, inFlight, mod, sub, covered } from "./ringModel";
 import { RING_SRC, ZIGZAG_SRC, UTILS_SRC, ZIGZAG_UTILS_SRC } from "./codeSources";
 import { CodeBlock } from "./CodePanel";
 import RingDiagram from "./RingDiagram";
@@ -87,7 +87,7 @@ function codeFocus(variant, N, phase, r) {
 function variables(variant, N, phase, r) {
   const { type, s } = phase;
   const zig = variant === "zigzag";
-  const kvLbl = (j) => (zig ? `KV${sub(j)},${sub(2 * N - 1 - j)}` : `KV${sub(j)}`);
+  const kvLbl = (j) => `KV${ownChunks(variant, N, j).map(sub).join(",")}`;
   const rows = [
     ["comm.rank", r],
     ["comm.send_rank", `${mod(r + 1, N)}  (next)`],
@@ -256,7 +256,7 @@ export default function RingView({ variant }) {
                 style={{ fontSize: 12.5, color: T.dim, marginTop: 8, lineHeight: 1.5 }}
                 html={zig
                   ? "Each GPU owns two rows of chunks, one near the top (few keys) and one near the bottom (many keys), so every GPU's total share of the triangle is the same."
-                  : "GPU $r$ owns a whole row band. The bottom band has $N$ blocks to compute, the top band one. White outline = the GPU you follow."}
+                  : "GPU $r$ owns two neighbouring chunk rows ($c_{2r}, c_{2r+1}$). The top pair has 3 visible cells (2 chunk²), the bottom pair $4N-1$ cells ($4N-2$ chunk²). White outline = the GPU you follow."}
               />
             </section>
             <section style={panel}>
@@ -282,7 +282,20 @@ export default function RingView({ variant }) {
             note={`following GPU ${sel}`}
           />
           <div style={{ ...panel, padding: "10px 14px" }}>
-            <div style={{ ...h2, marginBottom: 8 }}>Live variables · rank {sel}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+              <div style={{ ...h2, margin: 0 }}>Live variables · rank {sel}</div>
+              <div style={{ display: "flex", gap: 4 }}>
+                {Array.from({ length: N }, (_, r) => (
+                  <button
+                    key={r} onClick={() => setSel(r)} aria-label={`Show rank ${r}`}
+                    style={{ ...navBtn(false), height: 24, padding: "0 9px", fontSize: 11.5, color: DEV_COLORS[r],
+                      borderColor: r === sel ? DEV_COLORS[r] : T.rule, background: r === sel ? `${DEV_COLORS[r]}22` : T.well, fontWeight: r === sel ? 700 : 400 }}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "max-content 1fr", columnGap: 14, rowGap: 3, fontFamily: mono, fontSize: 12 }}>
               {vars.map(([k, v]) => (
                 <div key={k} style={{ display: "contents" }}>

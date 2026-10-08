@@ -26,3 +26,13 @@ video6-install:
 
 video6:
 	cd $(VIDEO6_DIR) && npm run dev -- --port $(VIDEO6_PORT)
+
+.PHONY: ring ring-install
+RING_DIR := ring-attention/ring-app
+RING_PORT ?= 5180
+
+ring-install:
+	cd $(RING_DIR) && npm install
+
+ring:
+	cd $(RING_DIR) && npm run dev -- --port $(RING_PORT)

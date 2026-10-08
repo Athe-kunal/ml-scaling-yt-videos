@@ -28,7 +28,7 @@ function statusText(variant, N, r, phase) {
   if (!d.active) return { t: "idle · masked", c: T.bad };
   if (type === "merge") return { t: d.branch === "hi" ? "merge out[L/2:]" : s === 0 ? "out = block_out" : "merge out, lse", c: T.accent2 };
   const lbl = variant === "ring"
-    ? d.branch === "0" ? "causal ◣ diag" : `full Q${sub(r)}·K${sub(d.j)}`
+    ? d.branch === "0" ? "causal ◣ diag" : "full: 4 chunk²"
     : d.branch === "0" ? "causal ◣ local" : d.branch === "lo" ? "q · k0  (K 1st half)" : "q1 · k  (Q 2nd half)";
   return { t: lbl, c: T.accent };
 }
@@ -104,8 +104,7 @@ export default function RingDiagram({ variant, N, phase, sel, onSel }) {
         const st = statusText(variant, N, r, phase);
         const isSel = r === sel;
         const tag = r === prev && r === next ? "prev = next" : r === prev ? "prev · recv_rank" : r === next ? "next · send_rank" : null;
-        const zig = variant === "zigzag";
-        const chipW = zig ? 40 : 84;
+        const chipW = 40;
         return (
           <g key={r} onClick={() => onSel(r)} style={{ cursor: "pointer" }}>
             <rect
@@ -119,13 +118,13 @@ export default function RingDiagram({ variant, N, phase, sel, onSel }) {
 
             <text x={bx + 9} y={by + 37} fontFamily={mono} fontSize="9.5" fill={T.dim}>q</text>
             {qc.map((c, i) => (
-              <Chip key={i} x={bx + 30 + i * (chipW + 6)} y={by + 25} w={chipW} label={zig ? `Q${sub(c)}` : `Q${sub(r)}`} color={col} on={qOn(i)} />
-            )).slice(0, zig ? 2 : 1)}
+              <Chip key={i} x={bx + 30 + i * (chipW + 6)} y={by + 25} w={chipW} label={`Q${sub(c)}`} color={col} on={qOn(i)} />
+            ))}
 
             <text x={bx + 9} y={by + 59} fontFamily={mono} fontSize="9.5" fill={T.dim}>kv</text>
             {kc.map((c, i) => (
-              <Chip key={`${held}-${i}`} x={bx + 30 + i * (chipW + 6)} y={by + 47} w={chipW} label={zig ? `KV${sub(c)}` : `KV${sub(held)}`} color={DEV_COLORS[held]} on={kOn(i)} />
-            )).slice(0, zig ? 2 : 1)}
+              <Chip key={`${held}-${i}`} x={bx + 30 + i * (chipW + 6)} y={by + 47} w={chipW} label={`KV${sub(c)}`} color={DEV_COLORS[held]} on={kOn(i)} />
+            ))}
 
             <text x={x} y={by + 82} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={st.c}>{st.t}</text>
 
@@ -143,8 +142,8 @@ export default function RingDiagram({ variant, N, phase, sel, onSel }) {
       {(flying || landed) && Array.from({ length: N }, (_, r) => {
         const j = mod(r - phase.s, N);
         const [px, py] = arcPt(r, landed ? 1 : tProg);
-        const lbl = variant === "zigzag" ? `KV${sub(j)},${sub(2 * N - 1 - j)}` : `KV${sub(j)}`;
-        const w = variant === "zigzag" ? 64 : 42;
+        const lbl = `KV${ownChunks(variant, N, j).map(sub).join(",")}`;
+        const w = 64;
         const hot = r === sel || r === prev;
         return (
           <g

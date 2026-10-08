@@ -54,9 +54,11 @@ export function ownChunks(variant, N, r) {
 export function deviceStep(variant, N, r, s) {
   const j = mod(r - s, N);
   if (variant === "ring") {
-    const blk = (q, k, tri = false) => ({ q0: 2 * q, qn: 2, k0: 2 * k, kn: 2, tri });
-    if (s === 0) return { j, branch: "0", active: true, cells: [blk(r, r, true)], work: 2, useQ: [0, 1], useKV: [0, 1] };
-    if (s <= r) return { j, branch: "lo", active: true, cells: [blk(r, j)], work: 4, useQ: [0, 1], useKV: [0, 1] };
+    // two contiguous chunks per GPU: Q = [c_2r; c_2r+1], KV_j = [c_2j; c_2j+1]
+    const c = (q, k, tri = false) => ({ q0: q, qn: 1, k0: k, kn: 1, tri });
+    const q0 = 2 * r, q1 = 2 * r + 1, k0 = 2 * j, k1 = 2 * j + 1;
+    if (s === 0) return { j, branch: "0", active: true, cells: [c(q0, k0, true), c(q1, k0), c(q1, k1, true)], work: 2, useQ: [0, 1], useKV: [0, 1] };
+    if (s <= r) return { j, branch: "lo", active: true, cells: [c(q0, k0), c(q0, k1), c(q1, k0), c(q1, k1)], work: 4, useQ: [0, 1], useKV: [0, 1] };
     return { j, branch: "skip", active: false, cells: [], work: 0, useQ: [], useKV: [] };
   }
   const a = r, b = 2 * N - 1 - r, jb = 2 * N - 1 - j;

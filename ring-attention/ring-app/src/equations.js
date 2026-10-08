@@ -1,4 +1,4 @@
-import { DEV_COLORS, mod, deviceStep, covered } from "./ringModel";
+import { DEV_COLORS, mod, deviceStep, covered, ownChunks } from "./ringModel";
 
 // Equations for the selected GPU r at the current phase, numbers plugged in.
 // Items are { p: html-with-$math$ } or { m: display tex }.
@@ -20,9 +20,9 @@ export function equations(variant, N, r, phase) {
     M(String.raw`\texttt{send\_rank} = (r+1) \bmod N = (${r}+1) \bmod ${N} = ${nxt}`);
     M(String.raw`\texttt{recv\_rank} = (r-1) \bmod N = (${r}-1) \bmod ${N} = ${prv}`);
     if (!zig) {
-      P(`The sequence of length $S$ is cut into $N=${N}$ contiguous blocks of $L=S/N$ tokens. GPU ${r} owns block ${r}:`);
-      M(String.raw`Q_{${r}},\,K_{${r}},\,V_{${r}} = X\big[\,${r}L : ${r + 1}L\,\big]\;W_{Q,K,V}`);
-      P("$Q_r$ never moves. The $K,V$ blocks rotate, so after $N$ steps every query block has met every key block.");
+      P(`The sequence is cut into $2N=${2 * N}$ chunks $c_0,\\dots,c_{${2 * N - 1}}$ of $L/2$ tokens (same chunks as the zig-zag view). Plain ring gives GPU $r$ two <b>neighbouring</b> chunks:`);
+      M(String.raw`Q_{r} = \big[\,Q_{c_{2r}}\,;\,Q_{c_{2r+1}}\big] = \big[\,Q_{c_{${2 * r}}}\,;\,Q_{c_{${2 * r + 1}}}\big] = X\big[\,${r}L : ${r + 1}L\,\big]\,W_Q`);
+      P("Same for $K, V$. $Q_r$ never moves. The $K,V$ blocks rotate, so after $N$ steps every query chunk has met every key chunk. Because both chunks sit together, GPU 0 holds only early tokens and GPU $N-1$ only late ones: that is the imbalance."); 
     } else {
       P(`The sequence is cut into $2N=${2 * N}$ chunks $c_0,\\dots,c_{${2 * N - 1}}$ of $L/2$ tokens. <code>extract_local</code> gives GPU $r$ one early and one late chunk:`);
       M(String.raw`Q_{r} = \big[\,Q_{c_{r}}\,;\,Q_{c_{2N-1-r}}\big] = \big[\,Q_{c_{${a}}}\,;\,Q_{c_{${b}}}\big]`);
@@ -44,7 +44,9 @@ export function equations(variant, N, r, phase) {
 
   const d = deviceStep(variant, N, r, s);
   const j = d.j, jn = mod(r - s - 1, N);
-  const kvj = zig ? String.raw`[K_{c_{${j}}};K_{c_{${2 * N - 1 - j}}}]` : `K_{${j}}`;
+  const [j0, j1] = ownChunks(variant, N, j);
+  const [q0, q1] = ownChunks(variant, N, r);
+  const kvj = String.raw`[K_{c_{${j0}}};K_{c_{${j1}}}]`;
 
   if (type === "send") {
     P(`Step ${s}: before any compute, every GPU posts a non-blocking <code>isend</code> of the KV it holds to <b>next</b> and an <code>irecv</code> from <b>prev</b> into fresh buffers <code>next_k, next_v</code>. <code>commit()</code> fires all four ops in one <code>batch_isend_irecv</code>.`);
@@ -67,15 +69,17 @@ export function equations(variant, N, r, phase) {
     if (s === N - 1) P("Last step: <code>step + 1 == world_size</code>, so nothing was sent. Compute only.");
     if (!zig) {
       if (d.branch === "0") {
-        P(`Step 0 is the diagonal block: query block ${r} against its own keys, so the causal mask is needed (<code>causal and step == 0</code> is True).`);
-        M(String.raw`O^{(0)}_{${r}},\ \ell^{(0)}_{${r}} = \mathrm{FlashAttn}\big(Q_{${r}},\,K_{${r}},\,V_{${r}};\ \text{causal}\big)`);
+        P(`Step 0 is the diagonal block: GPU ${r}'s queries against its own keys, so the causal mask is needed (<code>causal and step == 0</code> is True).`);
+        M(String.raw`O^{(0)}_{${r}},\ \ell^{(0)}_{${r}} = \mathrm{FlashAttn}\big([Q_{c_{${q0}}};Q_{c_{${q1}}}],\ [K_{c_{${q0}}};K_{c_{${q1}}}],\ [V_{c_{${q0}}};V_{c_{${q1}}}];\ \text{causal}\big)`);
+        P(String.raw`Chunk by chunk: $Q_{c_{${q0}}}{\cdot}K_{c_{${q0}}}$ and $Q_{c_{${q1}}}{\cdot}K_{c_{${q1}}}$ are triangles, $Q_{c_{${q1}}}{\cdot}K_{c_{${q0}}}$ is full. Work: $\tfrac12+1+\tfrac12 = 2$ chunk², the same on every GPU.`);
       } else if (d.active) {
         P(`<code>step &lt;= rank</code> (${s} ≤ ${r}), so the block came from <b>earlier</b> in the sequence: $j = ${j} < r = ${r}$. Every key precedes every query, so no mask.`);
-        M(String.raw`O^{(${s})}_{${r}} = \mathrm{softmax}\!\Big(\tfrac{Q_{${r}}${col(j, `K_{${j}}`)}^{\!\top}}{\sqrt d}\Big)${col(j, `V_{${j}}`)},\qquad \ell^{(${s})}_{${r}} = \log\sum_k \exp\!\Big(\tfrac{Q_{${r}}${col(j, `K_{${j}}`)}^{\!\top}}{\sqrt d}\Big)_{k}`);
-        P("Full $L\\times L$ block: twice the work of the diagonal step.");
+        M(String.raw`c_{${j0}},\,c_{${j1}} \;<\; c_{${q0}},\,c_{${q1}} \quad\Rightarrow\quad \text{all 4 chunk pairs visible}`);
+        M(String.raw`O^{(${s})}_{${r}} = \mathrm{softmax}\!\Big(\tfrac{[Q_{c_{${q0}}};Q_{c_{${q1}}}]\,${col(j, kvj)}^{\!\top}}{\sqrt d}\Big)\,${col(j, "V")},\qquad \ell^{(${s})}_{${r}} = \log\sum_k \exp\!\big(\cdot\big)_k`);
+        P("Full $L\\times L$ block = 4 chunk²: twice the diagonal step, and twice what any zig-zag step costs.");
       } else {
         P(`<code>step &lt;= rank</code> is False (${s} > ${r}): the block wrapped around from <b>later</b> in the sequence, $j = ${j} > r = ${r}$.`);
-        M(String.raw`j=${j} > r=${r} \;\Rightarrow\; \mathrm{mask}(Q_{${r}}K_{${j}}^{\top}) = -\infty \text{ everywhere}`);
+        M(String.raw`c_{${j0}},\,c_{${j1}} \;>\; c_{${q0}},\,c_{${q1}} \;\Rightarrow\; \text{all 4 chunk pairs masked: } 0 \text{ chunk}^2`);
         P(`GPU ${r} skips the kernel and just relays the KV. Meanwhile GPU ${N - 1} computes a full block, so GPU ${r} sits idle. This is the load imbalance.`);
       }
       return out;
@@ -130,7 +134,8 @@ export function transfers(variant, N, phase) {
   if (!["send", "compute", "merge", "wait"].includes(type) || s >= N - 1) return [];
   return Array.from({ length: N }, (_, i) => {
     const j = mod(i - s, N);
-    const tex = variant === "zigzag" ? String.raw`[K,V]_{c_{${j}}, c_{${2 * N - 1 - j}}}` : `KV_{${j}}`;
+    const [c0, c1] = ownChunks(variant, N, j);
+    const tex = String.raw`[K,V]_{c_{${c0}}, c_{${c1}}}`;
     return { from: i, to: mod(i + 1, N), j, tex: col(j, tex) };
   });
 }
