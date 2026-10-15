@@ -1,5 +1,5 @@
 import { T, mono } from "./theme";
-import { DEV_COLORS, deviceStep, ownChunks, progress, stepTimes } from "./ringModel";
+import { DEV_COLORS, deviceStep, ownChunks, progress, stepTimes, gridSize } from "./ringModel";
 
 // Causal attention matrix at 2N-chunk resolution (token order on both
 // axes). A cell is coloured by the GPU that computes it: faded once done,
@@ -14,14 +14,14 @@ function ownerOf(variant, N) {
 
 export function SequenceStrip({ variant, N }) {
   const own = ownerOf(variant, N);
-  const C = 2 * N;
+  const C = gridSize(variant, N);
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${C}, 1fr)`, gap: 2 }}>
         {own.map((r, c) => (
-          <div key={c} style={{ background: `${DEV_COLORS[r]}30`, border: `1px solid ${DEV_COLORS[r]}`, borderRadius: 4, padding: "3px 0", textAlign: "center", fontFamily: mono, fontSize: 10.5, color: DEV_COLORS[r] }}>
+          <div key={c} style={{ background: `${DEV_COLORS[r]}30`, border: `1px solid ${DEV_COLORS[r]}`, borderRadius: 4, padding: "3px 0", textAlign: "center", fontFamily: mono, fontSize: C > 16 ? 8.5 : 10.5, color: DEV_COLORS[r] }}>
             <div style={{ fontWeight: 700 }}>{r}</div>
-            <div style={{ fontSize: 9, opacity: 0.8 }}>c{c}</div>
+            {C <= 16 && <div style={{ fontSize: 9, opacity: 0.8 }}>{variant === "stripe" ? "t" : "c"}{c}</div>}
           </div>
         ))}
       </div>
@@ -33,7 +33,7 @@ export function SequenceStrip({ variant, N }) {
 }
 
 export default function AttentionMatrix({ variant, N, phase, sel }) {
-  const C = 2 * N;
+  const C = gridSize(variant, N);
   const size = 300, pad = 26;
   const cs = size / C;
   const own = ownerOf(variant, N);
@@ -82,7 +82,7 @@ export default function AttentionMatrix({ variant, N, phase, sel }) {
         })}
         {/* owner labels */}
         {own.map((r, c) => (
-          <g key={c} fontFamily={mono} fontSize={C > 10 ? 8 : 9.5} fontWeight="700" fill={DEV_COLORS[r]} textAnchor="middle">
+          <g key={c} fontFamily={mono} fontSize={C > 20 ? 6.5 : C > 10 ? 8 : 9.5} fontWeight="700" fill={DEV_COLORS[r]} textAnchor="middle">
             <text x={-12} y={c * cs + cs / 2 + 3.5}>{r}</text>
             <text x={c * cs + cs / 2} y={-9}>{r}</text>
           </g>

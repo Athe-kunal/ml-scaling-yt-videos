@@ -236,3 +236,127 @@ class RingComm:
 
 export const UTILS_SRC = parse(UTILS);
 export const ZIGZAG_UTILS_SRC = parse("# test utils: zigzag sharding of the full sequence\n" + EXTRACT_LOCAL.replace(/^\n/, "") + "# utils.py" + UTILS);
+
+export const STRIPE_SRC = parse(String.raw`
+def stripe_flash_attn_forward(
+    process_group, q, k, v, softmax_scale,
+    dropout_p=0, causal=True, window_size=(-1, -1),
+    alibi_slopes=None, deterministic=False,
+):
+    assert causal, "stripe flash attn only supports causal attention"
+    comm = RingComm(process_group)  #@init
+
+    out = None  #@init
+    lse = None  #@init
+    next_k, next_v = None, None  #@init
+
+    for step in range(comm.world_size):  #@loop
+        if step + 1 != comm.world_size:  #@send
+            next_k, next_v = comm.send_recv_kv(k, v)  #@send
+
+        params = get_default_args(_flash_attn_forward).copy()
+        if step <= comm.rank:  #@cond:lo
+            params.update(  #@comp:lo
+                {  #@comp:lo
+                    "q": q,  #@comp:lo
+                    "k": k,  #@comp:lo
+                    "v": v,  #@comp:lo
+                    "dropout_p": dropout_p,
+                    "softmax_scale": softmax_scale,
+                    "causal": causal,  #@comp:lo
+                    "alibi_slopes": alibi_slopes,
+                    "return_softmax": True and dropout_p > 0,
+                }  #@comp:lo
+            )  #@comp:lo
+            # (window_size / output unpacking differ across flash-attn versions)
+            block_out, block_lse = _flash_attn_forward(**params)  #@comp:lo
+            out, lse = update_out_and_lse(out, lse, block_out, block_lse)  #@merge:lo
+        else:  #@cond:hi
+            params.update(  #@comp:hi
+                {  #@comp:hi
+                    "q": q[:, 1:],  #@comp:hi
+                    "k": k[:, :-1],  #@comp:hi
+                    "v": v[:, :-1],  #@comp:hi
+                    "dropout_p": dropout_p,
+                    "softmax_scale": softmax_scale,
+                    "causal": causal,  #@comp:hi
+                    "alibi_slopes": alibi_slopes,
+                    "return_softmax": True and dropout_p > 0,
+                }  #@comp:hi
+            )  #@comp:hi
+            block_out, block_lse = _flash_attn_forward(**params)  #@comp:hi
+            out, lse = update_out_and_lse(  #@merge:hi
+                out, lse, block_out, block_lse, slice_=(slice(None), slice(1, None))  #@merge:hi
+            )  #@merge:hi
+
+        if step + 1 != comm.world_size:  #@wait
+            comm.wait()  #@wait
+            k, v = next_k, next_v  #@wait
+
+    out = out.to(q.dtype)  #@final
+    lse = lse.squeeze(dim=-1).transpose(1, 2)  #@final
+    return out, lse  #@final
+`);
+
+// Illustrative: how a rank takes its stripe of the full sequence.
+const STRIPE_LOCAL = String.raw`
+def extract_local(value, rank, world_size, dim=1):  #@layout
+    # token t -> rank t % world_size; local position p = t // world_size  #@layout
+    return value[:, rank::world_size].contiguous()  #@layout
+
+`;
+
+export const STRIPE_UTILS_SRC = parse("# stripe sharding (illustrative)\n" + STRIPE_LOCAL.replace(/^\n/, "") + "# utils.py" + UTILS);
+
+// Tree attention decode (Shyam et al. 2024), written with torch.distributed.
+// The paper's JAX version is lax.pmax + lax.psum; tree_allreduce spells out
+// the binomial tree those collectives run on.
+export const TREE_SRC = parse(String.raw`
+def tree_attn_decode(q, k, v, group=None):
+    # q: [B, H, 1, d] (same new token on every rank)
+    # k, v: this rank's shard of the KV cache, [B, H, S/N, d]
+    local_out, local_lse = flash_attn_decode(q, k, v)  #@local
+
+    # 1) global max of the local log-sum-exps: a shared shift for exp()
+    lse_max = local_lse.clone()  #@max
+    tree_allreduce(lse_max, op=torch.maximum, group=group)  #@max
+
+    # 2) rescale this shard's numerator / denominator to that shift
+    w = torch.exp(local_lse - lse_max).unsqueeze(-1)  #@rescale
+    num = local_out * w  #@rescale
+    den = w  #@rescale
+
+    # 3) one fused sum-allreduce for (num, den)
+    buf = torch.cat([num, den], dim=-1)  #@sum
+    tree_allreduce(buf, op=torch.add, group=group)  #@sum
+    num, den = buf[..., :-1], buf[..., -1:]  #@final
+    return num / den  #@final
+`);
+
+export const TREE_AR_SRC = parse(String.raw`
+def tree_allreduce(x, op, group=None):
+    # in production: dist.all_reduce(x, op=ReduceOp.MAX / SUM)
+    rank = dist.get_rank(group)  #@ar
+    N = dist.get_world_size(group)  #@ar
+    buf = torch.empty_like(x)  #@ar
+
+    # reduce: log2(N) levels, partial results flow up to rank 0
+    step = 1  #@up
+    while step < N:  #@up
+        if rank % (2 * step) == 0:  #@up_recv
+            dist.recv(buf, src=rank + step, group=group)  #@up_recv
+            x.copy_(op(x, buf))  #@up_recv
+        elif rank % (2 * step) == step:  #@up_send
+            dist.send(x, dst=rank - step, group=group)  #@up_send
+        step *= 2  #@up
+
+    # broadcast: walk back down the same tree
+    step //= 2  #@down
+    while step >= 1:  #@down
+        if rank % (2 * step) == 0:  #@down_send
+            dist.send(x, dst=rank + step, group=group)  #@down_send
+        elif rank % (2 * step) == step:  #@down_recv
+            dist.recv(x, src=rank - step, group=group)  #@down_recv
+        step //= 2  #@down
+    return x
+`);

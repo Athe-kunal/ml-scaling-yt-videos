@@ -19,7 +19,11 @@ export function equations(variant, N, r, phase) {
     P("<code>RingComm</code> fixes each GPU's two neighbours once, before the loop. Data only ever moves clockwise:");
     M(String.raw`\texttt{send\_rank} = (r+1) \bmod N = (${r}+1) \bmod ${N} = ${nxt}`);
     M(String.raw`\texttt{recv\_rank} = (r-1) \bmod N = (${r}-1) \bmod ${N} = ${prv}`);
-    if (!zig) {
+    if (variant === "stripe") {
+      P(`Tokens are dealt round-robin: token $t$ goes to GPU $t \\bmod N$, at local position $p = \\lfloor t/N \\rfloor$. GPU ${r} holds every ${N === 2 ? "second" : `${N}th`} token starting at ${r}:`);
+      M(String.raw`Q_{${r}} = \big[\,q_{${r}},\ q_{${r + N}},\ q_{${r + 2 * N}},\ \dots\big] = Q[\,${r}::${N}\,],\qquad \text{local } p \;\leftrightarrow\; \text{token } pN + ${r}`);
+      P("Same for $K, V$. Local order is still increasing in token order, which is why a (possibly shifted) causal mask on local positions is exact.");
+    } else if (!zig) {
       P(`The sequence is cut into $2N=${2 * N}$ chunks $c_0,\\dots,c_{${2 * N - 1}}$ of $L/2$ tokens (same chunks as the zig-zag view). Plain ring gives GPU $r$ two <b>neighbouring</b> chunks:`);
       M(String.raw`Q_{r} = \big[\,Q_{c_{2r}}\,;\,Q_{c_{2r+1}}\big] = \big[\,Q_{c_{${2 * r}}}\,;\,Q_{c_{${2 * r + 1}}}\big] = X\big[\,${r}L : ${r + 1}L\,\big]\,W_Q`);
       P("Same for $K, V$. $Q_r$ never moves. The $K,V$ blocks rotate, so after $N$ steps every query chunk has met every key chunk. Because both chunks sit together, GPU 0 holds only early tokens and GPU $N-1$ only late ones: that is the imbalance."); 
@@ -38,6 +42,7 @@ export function equations(variant, N, r, phase) {
     M(String.raw`\ell_{${r}} = \log\!\sum_{j\in\{${js.join(",")}\}} e^{\ell^{(j)}_{${r}}},\qquad O_{${r}} = \sum_{j\in\{${js.join(",")}\}} e^{\,\ell^{(j)}_{${r}}-\ell_{${r}}}\;O^{(j)}_{${r}}`);
     P("That is exactly softmax over the concatenated keys: each block's output is reweighted by its share of the total normaliser. <code>out</code> is cast back to <code>q.dtype</code>; <code>lse</code> is reshaped to $[B, H, L]$ for the backward pass.");
     P(String.raw`Comms per GPU: $N-1 = ${N - 1}$ hops of one KV block, each hidden behind one step of compute.`);
+    if (variant === "stripe") P("The output is in stripe order; gather and interleave the ranks to get token order back.");
     if (zig) P("The output is still in zig-zag order; gather and undo <code>extract_local</code> to get token order back.");
     return out;
   }
@@ -67,6 +72,21 @@ export function equations(variant, N, r, phase) {
 
   if (type === "compute") {
     if (s === N - 1) P("Last step: <code>step + 1 == world_size</code>, so nothing was sent. Compute only.");
+    if (variant === "stripe") {
+      if (d.branch === "lo") {
+        P(`<code>step &lt;= rank</code> (${s} ≤ ${r}): the KV is GPU ${j}'s stripe with $j = ${j} \\le r = ${r}$. Query $p$ is token $pN+${r}$, key $p'$ is token $p'N+${j}$:`);
+        M(String.raw`p'N + ${j} \;\le\; pN + ${r} \quad\Longleftrightarrow\quad p' \le p`);
+        M(String.raw`O_b = \mathrm{FlashAttn}\big(Q_{${r}},\ ${col(j, `K_{${j}}`)},\ ${col(j, `V_{${j}}`)};\ \text{causal}\big)`);
+        P("An ordinary causal mask on local positions, diagonal included: $\\tfrac{L(L+1)}{2}$ scores.");
+      } else {
+        P(`<code>else</code> (${s} > ${r}): the KV is GPU ${j}'s stripe with $j = ${j} > r = ${r}$, so key $p'$ sits <b>after</b> query $p'$ in the sequence:`);
+        M(String.raw`p'N + ${j} \;\le\; pN + ${r} \quad\Longleftrightarrow\quad p' \le p - 1`);
+        M(String.raw`O_b = \mathrm{FlashAttn}\big(Q_{${r}}[1{:}],\ ${col(j, `K_{${j}}[{:}{-1}]`)},\ ${col(j, `V_{${j}}[{:}{-1}]`)};\ \text{causal}\big)`);
+        P("Dropping the first query and the last key shifts the diagonal down by one: query $p$ in the slice is local $p+1$, and the causal mask then allows keys $p' \\le p$. Query 0 sees nothing from this block; key $L-1$ is in everyone's future. $\\tfrac{L(L-1)}{2}$ scores.");
+      }
+      P("Both branches cost $\\approx L^2/2$, on every GPU at every step, so nobody waits at <code>comm.wait()</code>.");
+      return out;
+    }
     if (!zig) {
       if (d.branch === "0") {
         P(`Step 0 is the diagonal block: GPU ${r}'s queries against its own keys, so the causal mask is needed (<code>causal and step == 0</code> is True).`);
@@ -120,7 +140,10 @@ export function equations(variant, N, r, phase) {
   M(String.raw`\ell' = \log\!\big(e^{\ell} + e^{\ell_b}\big) = \ell - \log\sigma(\ell - \ell_b)`);
   M(String.raw`O' = \frac{e^{\ell}O + e^{\ell_b}O_b}{e^{\ell'}} = O - \sigma(\ell_b - \ell)\,\big(O - O_b\big)`);
   P(String.raw`Because $e^{\ell_b-\ell'} = \sigma(\ell_b-\ell)$ and $e^{\ell-\ell'} = 1-\sigma(\ell_b-\ell)$. The sigmoid form never exponentiates a large number, so it is stable in fp32.`);
-  if (d.branch === "hi") {
+  if (d.branch === "hi" && variant === "stripe") {
+    P("Query position 0 got no block this step, so the merge runs on <code>slice_ = (:, 1:)</code>; row 0 keeps its old $(O,\\ell)$:");
+    M(String.raw`O[1{:}] \leftarrow O[1{:}] - \sigma\big(\ell_b - \ell[1{:}]\big)\big(O[1{:}] - O_b\big)`);
+  } else if (d.branch === "hi") {
     P(String.raw`Only the late half $Q_{c_{${b}}}$ was computed, so the merge runs on <code>slice_ = (:, L/2:)</code>. Rows of $Q_{c_{${a}}}$ keep their old $(O,\ell)$:`);
     M(String.raw`O[c_{${b}}] \leftarrow O[c_{${b}}] - \sigma\big(\ell_b - \ell[c_{${b}}]\big)\big(O[c_{${b}}] - O_b\big)`);
   }
@@ -135,7 +158,7 @@ export function transfers(variant, N, phase) {
   return Array.from({ length: N }, (_, i) => {
     const j = mod(i - s, N);
     const [c0, c1] = ownChunks(variant, N, j);
-    const tex = String.raw`[K,V]_{c_{${c0}}, c_{${c1}}}`;
+    const tex = variant === "stripe" ? String.raw`[K,V]_{${j}::${N}}` : String.raw`[K,V]_{c_{${c0}}, c_{${c1}}}`;
     return { from: i, to: mod(i + 1, N), j, tex: col(j, tex) };
   });
 }

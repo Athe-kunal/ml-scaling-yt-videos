@@ -1,37 +1,42 @@
 import { useEffect, useMemo, useState } from "react";
 import { T, mono, sans } from "./theme";
-import { withInlineMath, katexHtml } from "./latex";
-import { DEV_COLORS, PHASE, STEP_PHASES, ownChunks, buildPhases, deviceStep, heldKV, inFlight, mod, sub, covered } from "./ringModel";
-import { RING_SRC, ZIGZAG_SRC, UTILS_SRC, ZIGZAG_UTILS_SRC } from "./codeSources";
+import { katexHtml } from "./latex";
+import { DEV_COLORS, PHASE, STEP_PHASES, shardLabel, STRIPE_L, buildPhases, deviceStep, heldKV, inFlight, mod, covered } from "./ringModel";
+import { RING_SRC, ZIGZAG_SRC, STRIPE_SRC, UTILS_SRC, ZIGZAG_UTILS_SRC, STRIPE_UTILS_SRC } from "./codeSources";
 import { CodeBlock } from "./CodePanel";
+import { panel, h2, chip, navBtn } from "./styles";
+import { Rich, Tex } from "./ui";
 import RingDiagram from "./RingDiagram";
 import AttentionMatrix, { SequenceStrip, WorkChart } from "./AttentionMatrix";
 import { equations, transfers } from "./equations";
-
-const panel = { background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 10, padding: 16, minWidth: 0 };
-const h2 = { margin: "0 0 12px", fontFamily: sans, fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase", color: T.dim, fontWeight: 600 };
-const chip = (c) => ({
-  display: "inline-block", fontFamily: mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase",
-  padding: "3px 9px", borderRadius: 5, color: c, border: `1px solid ${c}55`, background: `${c}14`,
-});
-const navBtn = (disabled) => ({
-  fontFamily: mono, fontSize: 13, height: 32, padding: "0 12px", borderRadius: 6, flexShrink: 0,
-  border: `1px solid ${T.rule}`, background: disabled ? "transparent" : T.well,
-  color: disabled ? T.rule : T.ink, cursor: disabled ? "default" : "pointer",
-});
-const Rich = ({ html, style }) => <div style={style} dangerouslySetInnerHTML={{ __html: withInlineMath(html) }} />;
-const Tex = ({ tex }) => <div style={{ overflowX: "auto", overflowY: "hidden", padding: "2px 0" }} dangerouslySetInnerHTML={{ __html: katexHtml(tex, true) }} />;
 
 const COPY = {
   ring: {
     eyebrow: "SEQUENCE PARALLELISM · RING ATTENTION",
     title: "Ring attention: Q stays, KV goes around",
     intro: "Each GPU keeps its query block and passes its key/value block to the next GPU, $N$ times. Every hop is posted <i>before</i> the attention kernel, so the transfer hides behind compute. With a causal mask, half the blocks it receives are all future tokens, and that is where the imbalance comes from.",
+    src: ["ring_flash_attn.py", RING_SRC, 430],
+    utils: ["utils.py", UTILS_SRC],
+    matrixNote: () => "GPU $r$ owns two neighbouring chunk rows ($c_{2r}, c_{2r+1}$). The top pair has 3 visible cells (2 chunk²), the bottom pair $4N-1$ cells ($4N-2$ chunk²). White outline = the GPU you follow.",
+    workNote: (N) => `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$). A step lasts as long as its slowest GPU. Step 0 costs 2, every later step 4 (a full block on GPU ${N - 1}), so wall time is $4N-2 = ${4 * N - 2}$ against an ideal $2N = ${2 * N}$.`,
   },
   zigzag: {
     eyebrow: "SEQUENCE PARALLELISM · ZIG-ZAG RING ATTENTION",
     title: "Zig-zag ring attention: balance the causal triangle",
     intro: "Same ring and same hops, but the sequence is cut into $2N$ chunks and GPU $r$ takes chunks $r$ and $2N-1-r$: one early, one late. Every off-diagonal step now costs exactly half a block on every GPU, picked by one of two slices: <code>k[:, :L/2]</code> or <code>q[:, L/2:]</code>.",
+    src: ["zigzag_ring_flash_attn.py", ZIGZAG_SRC, 470],
+    utils: ["extract_local + utils.py", ZIGZAG_UTILS_SRC],
+    matrixNote: () => "Each GPU owns two rows of chunks, one near the top (few keys) and one near the bottom (many keys), so every GPU's total share of the triangle is the same.",
+    workNote: (N) => `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$). Every step costs 2 on every GPU: wall time $2N = ${2 * N}$, no idle time. Same bar scale as the ring view.`,
+  },
+  stripe: {
+    eyebrow: "SEQUENCE PARALLELISM · STRIPE ATTENTION",
+    title: "Stripe attention: deal tokens round-robin",
+    intro: "Same ring and same hops, but tokens are dealt like cards: token $t$ goes to GPU $t \\bmod N$. Every GPU then holds a thin stripe spread over the whole sequence, so each KV block it receives is about half visible, at every step. If the block came from an earlier rank the plain causal mask is right; from a later rank the mask shifts by one token: <code>q[:, 1:]</code> against <code>k[:, :-1]</code>.",
+    src: ["stripe_flash_attn.py", STRIPE_SRC, 470],
+    utils: ["extract_local + utils.py", STRIPE_UTILS_SRC],
+    matrixNote: (N) => `Token resolution: $S = ${STRIPE_L}N = ${STRIPE_L * N}$ tokens, row $t$ belongs to GPU $t \\bmod ${N}$. Every GPU's rows are spread evenly down the triangle. A step fills $\\tfrac{L(L+1)}{2}$ cells (from an earlier rank) or $\\tfrac{L(L-1)}{2}$ (later rank): with $L=${STRIPE_L}$ that is ${(STRIPE_L * (STRIPE_L + 1)) / 2}$ vs ${(STRIPE_L * (STRIPE_L - 1)) / 2}$, but both tend to $L^2/2$ as $L$ grows.`,
+    workNote: (N) => `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$), large-$L$ limit: every step costs $L^2/2 = 2$ on every GPU, wall time $2N = ${2 * N}$. The leftover imbalance is one token's diagonal, $L$ cells per step, negligible for long sequences.`,
   },
 };
 
@@ -86,8 +91,7 @@ function codeFocus(variant, N, phase, r) {
 
 function variables(variant, N, phase, r) {
   const { type, s } = phase;
-  const zig = variant === "zigzag";
-  const kvLbl = (j) => `KV${ownChunks(variant, N, j).map(sub).join(",")}`;
+  const kvLbl = (j) => shardLabel(variant, N, j, "KV");
   const rows = [
     ["comm.rank", r],
     ["comm.send_rank", `${mod(r + 1, N)}  (next)`],
@@ -100,9 +104,13 @@ function variables(variant, N, phase, r) {
   else rows.push(["next_k, next_v", type === "init" ? "None" : "—"]);
   if (STEP_PHASES.includes(type)) {
     const d = deviceStep(variant, N, r, s);
-    if (!zig) {
+    if (variant === "ring") {
       rows.push(["step <= comm.rank", `${s} <= ${r} → ${s <= r}`]);
       rows.push(["causal and step == 0", `${s === 0}`]);
+    } else if (variant === "stripe") {
+      rows.push(["step <= comm.rank", `${s} <= ${r} → ${s <= r}`]);
+      rows.push(["kernel inputs", d.branch === "lo" ? "q, k, v  causal" : "q[:,1:], k[:,:-1], v[:,:-1]  causal"]);
+      rows.push(["slice_", d.branch === "hi" ? "(:, 1:)" : "None"]);
     } else {
       rows.push(["branch", d.branch === "0" ? "step == 0" : d.branch === "lo" ? `step <= rank (${s} <= ${r})` : `else (${s} > ${r})`]);
       rows.push(["kernel inputs", d.branch === "0" ? "q, k, v  causal" : d.branch === "lo" ? "q, k0, v0" : "q1, k, v"]);
@@ -122,7 +130,6 @@ export default function RingView({ variant }) {
   const phases = useMemo(() => buildPhases(N), [N]);
   const last = phases.length - 1;
   const phase = phases[Math.min(idx, last)];
-  const zig = variant === "zigzag";
   const copy = COPY[variant];
 
   const changeN = (n) => {
@@ -254,9 +261,7 @@ export default function RingView({ variant }) {
               <AttentionMatrix variant={variant} N={N} phase={phase} sel={sel} />
               <Rich
                 style={{ fontSize: 12.5, color: T.dim, marginTop: 8, lineHeight: 1.5 }}
-                html={zig
-                  ? "Each GPU owns two rows of chunks, one near the top (few keys) and one near the bottom (many keys), so every GPU's total share of the triangle is the same."
-                  : "GPU $r$ owns two neighbouring chunk rows ($c_{2r}, c_{2r+1}$). The top pair has 3 visible cells (2 chunk²), the bottom pair $4N-1$ cells ($4N-2$ chunk²). White outline = the GPU you follow."}
+                html={copy.matrixNote(N)}
               />
             </section>
             <section style={panel}>
@@ -264,9 +269,7 @@ export default function RingView({ variant }) {
               <WorkChart variant={variant} N={N} phase={phase} sel={sel} />
               <Rich
                 style={{ fontSize: 12.5, color: T.dim, marginTop: 12, lineHeight: 1.55 }}
-                html={zig
-                  ? `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$). Every step costs 2 on every GPU: wall time $2N = ${2 * N}$, no idle time. Same bar scale as the ring view.`
-                  : `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$). A step lasts as long as its slowest GPU. Step 0 costs 2, every later step 4 (a full block on GPU ${N - 1}), so wall time is $4N-2 = ${4 * N - 2}$ against an ideal $2N = ${2 * N}$.`}
+                html={copy.workNote(N)}
               />
             </section>
           </div>
@@ -275,10 +278,10 @@ export default function RingView({ variant }) {
         {/* ---------- code ---------- */}
         <aside className="ra-side">
           <CodeBlock
-            title={zig ? "zigzag_ring_flash_attn.py" : "ring_flash_attn.py"}
-            lines={zig ? ZIGZAG_SRC : RING_SRC}
+            title={copy.src[0]}
+            lines={copy.src[1]}
             focus={focus.main}
-            maxHeight={zig ? 470 : 430}
+            maxHeight={copy.src[2]}
             note={`following GPU ${sel}`}
           />
           <div style={{ ...panel, padding: "10px 14px" }}>
@@ -306,8 +309,8 @@ export default function RingView({ variant }) {
             </div>
           </div>
           <CodeBlock
-            title={zig ? "extract_local + utils.py" : "utils.py"}
-            lines={zig ? ZIGZAG_UTILS_SRC : UTILS_SRC}
+            title={copy.utils[0]}
+            lines={copy.utils[1]}
             focus={focus.utils}
             maxHeight={300}
             note={phase.type === "compute" ? (inFlight(N, phase) ? "kernel runs; _reqs still pending" : "kernel runs (flash-attn)") : null}

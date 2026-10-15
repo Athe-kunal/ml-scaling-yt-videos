@@ -43,9 +43,22 @@ export function buildPhases(N) {
 
 export const STEP_PHASES = ["send", "compute", "merge", "wait"];
 
-// Chunk ids a GPU's Q (or a KV block from GPU j) covers.
+// Stripe is drawn at token resolution: S = STRIPE_L * N tokens, token t
+// lives on GPU t % N (local position p = t // N).
+export const STRIPE_L = 4;
+
+// Grid size of the attention matrix for a variant.
+export const gridSize = (variant, N) => (variant === "stripe" ? STRIPE_L * N : 2 * N);
+
+// Grid ids (chunks, or tokens for stripe) a GPU's Q (or a KV block from GPU j) covers.
 export function ownChunks(variant, N, r) {
+  if (variant === "stripe") return Array.from({ length: STRIPE_L }, (_, p) => p * N + r);
   return variant === "ring" ? [2 * r, 2 * r + 1] : [r, 2 * N - 1 - r];
+}
+
+// Short label for a GPU's shard: chunk list, or a python stride for stripe.
+export function shardLabel(variant, N, r, prefix) {
+  return variant === "stripe" ? `${prefix} ${r}::${N}` : `${prefix}${ownChunks(variant, N, r).map(sub).join(",")}`;
 }
 
 // What GPU r does at step s. `branch` names the code path taken, `cells`
@@ -60,6 +73,17 @@ export function deviceStep(variant, N, r, s) {
     if (s === 0) return { j, branch: "0", active: true, cells: [c(q0, k0, true), c(q1, k0), c(q1, k1, true)], work: 2, useQ: [0, 1], useKV: [0, 1] };
     if (s <= r) return { j, branch: "lo", active: true, cells: [c(q0, k0), c(q0, k1), c(q1, k0), c(q1, k1)], work: 4, useQ: [0, 1], useKV: [0, 1] };
     return { j, branch: "skip", active: false, cells: [], work: 0, useQ: [], useKV: [] };
+  }
+  if (variant === "stripe") {
+    // query (p, r) = token pN+r sees key (p', j) = token p'N+j  iff  p'N+j <= pN+r
+    //   j <= r: p' <= p      -> plain causal mask on local positions
+    //   j >  r: p' <= p - 1  -> causal mask shifted by one (q[:,1:] vs k[:,:-1])
+    const shift = s > r ? 1 : 0;
+    const cells = [];
+    for (let p = 0; p < STRIPE_L; p++)
+      for (let pk = 0; pk <= p - shift; pk++) cells.push({ q0: p * N + r, qn: 1, k0: pk * N + j, kn: 1, tri: false });
+    // work in chunk² (chunk = L/2 tokens): L²/2 either way as L grows
+    return { j, branch: shift ? "hi" : "lo", active: true, cells, work: 2, useQ: [0], useKV: [0] };
   }
   const a = r, b = 2 * N - 1 - r, jb = 2 * N - 1 - j;
   const c = (q, k, tri = false) => ({ q0: q, qn: 1, k0: k, kn: 1, tri });
