@@ -1,27 +1,32 @@
 import { T, mono } from "./theme";
-import { DEV_COLORS, deviceStep, ownChunks, progress, stepTimes, gridSize } from "./ringModel";
+import { DEV_COLORS, deviceStep, ownChunks, progress, stepTimes, gridSize, STRIPE_L } from "./ringModel";
 
 // Causal attention matrix at 2N-chunk resolution (token order on both
 // axes). A cell is coloured by the GPU that computes it: faded once done,
 // bright on the current step. The strip above shows which GPU owns which
 // chunk of the sequence.
 
-function ownerOf(variant, N) {
+// `tokens`: draw chunked variants on the same S = STRIPE_L*N token grid as
+// stripe (each chunk becomes f tokens), so the two can be compared cell for cell.
+const factor = (variant, N, tokens) => (tokens && variant !== "stripe" ? (STRIPE_L * N) / gridSize(variant, N) : 1);
+
+function ownerOf(variant, N, f = 1) {
   const own = [];
-  for (let r = 0; r < N; r++) for (const c of ownChunks(variant, N, r)) own[c] = r;
+  for (let r = 0; r < N; r++) for (const c of ownChunks(variant, N, r)) for (let t = 0; t < f; t++) own[c * f + t] = r;
   return own;
 }
 
-export function SequenceStrip({ variant, N }) {
-  const own = ownerOf(variant, N);
-  const C = gridSize(variant, N);
+export function SequenceStrip({ variant, N, tokens = false }) {
+  const f = factor(variant, N, tokens);
+  const own = ownerOf(variant, N, f);
+  const C = gridSize(variant, N) * f;
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${C}, 1fr)`, gap: 2 }}>
         {own.map((r, c) => (
           <div key={c} style={{ background: `${DEV_COLORS[r]}30`, border: `1px solid ${DEV_COLORS[r]}`, borderRadius: 4, padding: "3px 0", textAlign: "center", fontFamily: mono, fontSize: C > 16 ? 8.5 : 10.5, color: DEV_COLORS[r] }}>
             <div style={{ fontWeight: 700 }}>{r}</div>
-            {C <= 16 && <div style={{ fontSize: 9, opacity: 0.8 }}>{variant === "stripe" ? "t" : "c"}{c}</div>}
+            {C <= 16 && <div style={{ fontSize: 9, opacity: 0.8 }}>{variant === "stripe" || f > 1 ? "t" : "c"}{c}</div>}
           </div>
         ))}
       </div>
@@ -32,11 +37,13 @@ export function SequenceStrip({ variant, N }) {
   );
 }
 
-export default function AttentionMatrix({ variant, N, phase, sel }) {
-  const C = gridSize(variant, N);
+export default function AttentionMatrix({ variant, N, phase, sel, tokens = false }) {
+  const f = factor(variant, N, tokens);
+  const C = gridSize(variant, N) * f;
   const size = 300, pad = 26;
   const cs = size / C;
-  const own = ownerOf(variant, N);
+  const own = ownerOf(variant, N, f);
+  const chunkEvery = variant === "ring" ? 2 * f : variant === "zigzag" && f > 1 ? f : 0;
   const { doneBelow, current } = progress(phase);
 
   const cells = [];
@@ -44,7 +51,7 @@ export default function AttentionMatrix({ variant, N, phase, sel }) {
     if (s >= doneBelow && s !== current) continue;
     for (let r = 0; r < N; r++) {
       const d = deviceStep(variant, N, r, s);
-      for (const c of d.cells) cells.push({ ...c, r, cur: s === current });
+      for (const c of d.cells) cells.push({ q0: c.q0 * f, qn: c.qn * f, k0: c.k0 * f, kn: c.kn * f, tri: c.tri, r, cur: s === current });
     }
   }
 
@@ -62,7 +69,7 @@ export default function AttentionMatrix({ variant, N, phase, sel }) {
         ))}
         {/* grid */}
         {Array.from({ length: C + 1 }, (_, i) => (
-          <g key={i} stroke={T.rule} strokeWidth={variant === "ring" && i % 2 === 0 ? 1 : 0.5} opacity={0.7}>
+          <g key={i} stroke={T.rule} strokeWidth={chunkEvery && i % chunkEvery === 0 ? 1 : 0.5} opacity={0.7}>
             <line x1={0} y1={i * cs} x2={size} y2={i * cs} />
             <line x1={i * cs} y1={0} x2={i * cs} y2={size} />
           </g>

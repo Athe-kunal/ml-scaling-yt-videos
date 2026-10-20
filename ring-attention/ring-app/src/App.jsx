@@ -2,11 +2,13 @@ import { useState } from "react";
 import { T, mono } from "./theme";
 import RingView from "./RingView";
 import TreeView from "./TreeView";
+import CompareView from "./CompareView";
 
 const VIEWS = [
   { id: "ring", label: "Ring attention", sub: "contiguous blocks · causal imbalance" },
   { id: "zigzag", label: "Zig-zag ring attention", sub: "chunks r and 2N-1-r · balanced" },
   { id: "stripe", label: "Stripe attention", sub: "token t on GPU t mod N · shifted mask" },
+  { id: "compare", label: "Zig-zag vs Stripe", sub: "one stepper · both side by side" },
   { id: "tree", label: "Tree attention", sub: "decoding · allreduce in log N" },
 ];
 
@@ -29,7 +31,7 @@ export default function App() {
           );
         })}
       </nav>
-      {view === "tree" ? <TreeView /> : <RingView key={view} variant={view} />}
+      {view === "tree" ? <TreeView /> : view === "compare" ? <CompareView /> : <RingView key={view} variant={view} />}
     </div>
   );
 }
