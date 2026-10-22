@@ -6,6 +6,7 @@ import { TREE_PHASE, PER, makeData, buildPhases, stateAt, role, log2, fmt, vec }
 import { TREE_SRC, TREE_AR_SRC } from "./codeSources";
 import { CodeBlock } from "./CodePanel";
 import TreeDiagram from "./TreeDiagram";
+import { StageStrip, TreeWeights } from "./TreeWeights";
 import { panel, h2, chip, navBtn } from "./styles";
 import { Rich, Tex } from "./ui";
 
@@ -171,7 +172,7 @@ function CostTable({ N }) {
 
 export default function TreeView() {
   const [N, setN] = useState(8);
-  const [sel, setSel] = useState(5);
+  const [sel, setSel] = useState(0);
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const data = useMemo(() => makeData(N), [N]);
@@ -255,6 +256,15 @@ export default function TreeView() {
       <div className="ra-grid">
         <main style={{ display: "grid", gap: 18, minWidth: 0 }}>
           <section style={panel}>
+            <div style={h2}>The recipe · five stages, two of them collectives</div>
+            <StageStrip N={N} phase={ph} />
+            <Rich
+              style={{ fontSize: 12.5, color: T.dim, marginTop: 10, lineHeight: 1.5 }}
+              html="Why it works: $o = \sum_i e^{\ell_i - \ell}\,o_i$ with $\ell = \log\sum_i e^{\ell_i}$. Each GPU's output only needs re-weighting by its share of the global normaliser. Stages 2–4 compute exactly those shares, with $m$ subtracted so no $e^x$ overflows."
+            />
+          </section>
+
+          <section style={panel}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div style={h2}>The tree · click a GPU to follow it</div>
               <div style={{ display: "flex", gap: 6 }}>
@@ -265,8 +275,13 @@ export default function TreeView() {
             <TreeDiagram N={N} phase={ph} state={state} data={data} sel={sel} onSel={setSel} />
             <Rich
               style={{ fontSize: 12.5, color: T.dim, marginTop: 6, lineHeight: 1.5 }}
-              html="Dashed edge: left child, same GPU as the parent, no message. Solid edge: the right child's GPU sends. Toy numbers: $d=4$, 3 keys per GPU, seeded."
+              html="Read it bottom-up for the reduce and top-down for the broadcast. Dashed edge: left child, same GPU as the parent, so nothing is sent. Solid edge: the right child's GPU sends. In each GPU box, <code>a→b</code> means its buffer just changed, and the coloured squares show whose data that buffer already includes (all $N$ = done). Toy numbers: $d=4$, 3 key tokens per GPU, seeded."
             />
+          </section>
+
+          <section style={panel}>
+            <div style={h2}>What the numbers mean · attention weights over all {data.N * 3} key tokens</div>
+            <TreeWeights data={data} phase={ph} state={state} sel={sel} />
           </section>
 
           <section style={panel}>

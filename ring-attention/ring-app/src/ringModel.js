@@ -56,9 +56,17 @@ export function ownChunks(variant, N, r) {
   return variant === "ring" ? [2 * r, 2 * r + 1] : [r, 2 * N - 1 - r];
 }
 
-// Short label for a GPU's shard: chunk list, or a python stride for stripe.
+// Explicit token ids a GPU's shard holds, for a toy sequence of S = 4N tokens
+// (N=4 -> 16 tokens). Chunked layouts use 2N chunks of 2 tokens each.
+export const seqLen = (N) => STRIPE_L * N;
+export function tokensOf(variant, N, r) {
+  if (variant === "stripe") return ownChunks(variant, N, r);
+  return ownChunks(variant, N, r).flatMap((c) => [2 * c, 2 * c + 1]);
+}
+
+// Label for a GPU's shard: its token ids, e.g. "KV 1,5,9,13".
 export function shardLabel(variant, N, r, prefix) {
-  return variant === "stripe" ? `${prefix} ${r}::${N}` : `${prefix}${ownChunks(variant, N, r).map(sub).join(",")}`;
+  return `${prefix} ${tokensOf(variant, N, r).join(",")}`;
 }
 
 // What GPU r does at step s. `branch` names the code path taken, `cells`

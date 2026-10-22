@@ -81,27 +81,33 @@ export function role(rank, phase) {
 //   msgs:    messages sent during phase idx
 export function stateAt(data, phases, idx) {
   const { N, gpus: G } = data;
-  const st = G.map(() => ({ local: false, mx: null, num: null, den: null, out: null, got: false }));
+  // cov: which GPUs' shards the buffer already includes (bitmask), prev: buffer before this phase
+  const st = G.map(() => ({ local: false, mx: null, num: null, den: null, out: null, got: false, cov: 0, changed: false, prevVal: null }));
   const nodes = {};
   let msgs = [];
   const add = (a, b) => a.map((x, t) => x + b[t]);
   for (let p = 0; p <= idx; p++) {
     const ph = phases[p];
     msgs = [];
-    if (ph.type === "local") st.forEach((s, i) => { s.local = true; s.mx = G[i].lse; });
+    st.forEach((s) => { s.changed = false; });
+    if (ph.type === "local") st.forEach((s, i) => { s.local = true; s.mx = G[i].lse; s.cov = 1 << i; });
     if (ph.type === "rescale") st.forEach((s, i) => {
       const w = Math.exp(G[i].lse - s.mx);
-      s.w = w; s.num = G[i].o.map((x) => x * w); s.den = w; s.got = false;
+      s.w = w; s.num = G[i].o.map((x) => x * w); s.den = w; s.got = false; s.cov = 1 << i;
     });
     if (ph.type === "up" || ph.type === "down") {
-      const snap = st.map((s) => ({ mx: s.mx, num: s.num, den: s.den }));
+      const snap = st.map((s) => ({ mx: s.mx, num: s.num, den: s.den, cov: s.cov }));
       for (let r = 0; r < N; r++) {
         const ro = role(r, ph);
         if (ro.kind !== "recv") continue;
         const src = snap[ro.peer], me = st[r];
+        const before = ph.op === "max" ? me.mx : me.den;
         if (ph.op === "max") me.mx = ph.type === "up" ? Math.max(me.mx, src.mx) : src.mx;
         else if (ph.type === "up") { me.num = add(me.num, src.num); me.den = me.den + src.den; }
         else { me.num = src.num; me.den = src.den; }
+        me.prevVal = before;
+        me.changed = true;
+        me.cov = ph.type === "up" ? me.cov | src.cov : src.cov;
         if (ph.type === "down") me.got = true;
         msgs.push({ from: ro.peer, to: r, val: ph.op === "max" ? src.mx : src.den, vec: ph.op === "sum" ? src.num : null });
       }
@@ -119,3 +125,8 @@ export function stateAt(data, phases, idx) {
 
 export const fmt = (x, d = 2) => (x == null ? "—" : (Math.abs(x) < 0.005 && x !== 0 ? x.toExponential(1) : x.toFixed(d)));
 export const vec = (v, d = 2) => (v ? `[${v.map((x) => fmt(x, d)).join(", ")}]` : "—");
+
+export const covList = (mask, N) => Array.from({ length: N }, (_, i) => i).filter((i) => mask & (1 << i));
+
+// Which of the five stages a phase belongs to (allreduce phases -> "max" / "sum").
+export const stageOf = (ph) => (ph.type === "up" || ph.type === "down" ? ph.op : ph.type);

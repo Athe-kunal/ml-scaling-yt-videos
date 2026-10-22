@@ -12,7 +12,7 @@ export const COPY = {
     intro: "Each GPU keeps its query block and passes its key/value block to the next GPU, $N$ times. Every hop is posted <i>before</i> the attention kernel, so the transfer hides behind compute. With a causal mask, half the blocks it receives are all future tokens, and that is where the imbalance comes from.",
     src: ["ring_flash_attn.py", RING_SRC, 430],
     utils: ["utils.py", UTILS_SRC],
-    matrixNote: () => "GPU $r$ owns two neighbouring chunk rows ($c_{2r}, c_{2r+1}$). The top pair has 3 visible cells (2 chunk²), the bottom pair $4N-1$ cells ($4N-2$ chunk²). White outline = the GPU you follow.",
+    matrixNote: (N) => `Token resolution, $S = ${STRIPE_L * N}$ tokens. GPU $r$ owns tokens $4r..4r+3$ (thick lines = 2-token chunks). GPU 0's rows have almost nothing to the left of the diagonal; GPU ${N - 1}'s rows see the whole sequence. White outline = the GPU you follow.`,
     workNote: (N) => `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$). A step lasts as long as its slowest GPU. Step 0 costs 2, every later step 4 (a full block on GPU ${N - 1}), so wall time is $4N-2 = ${4 * N - 2}$ against an ideal $2N = ${2 * N}$.`,
   },
   zigzag: {
@@ -21,7 +21,7 @@ export const COPY = {
     intro: "Same ring and same hops, but the sequence is cut into $2N$ chunks and GPU $r$ takes chunks $r$ and $2N-1-r$: one early, one late. Every off-diagonal step now costs exactly half a block on every GPU, picked by one of two slices: <code>k[:, :L/2]</code> or <code>q[:, L/2:]</code>.",
     src: ["zigzag_ring_flash_attn.py", ZIGZAG_SRC, 470],
     utils: ["extract_local + utils.py", ZIGZAG_UTILS_SRC],
-    matrixNote: () => "Each GPU owns two rows of chunks, one near the top (few keys) and one near the bottom (many keys), so every GPU's total share of the triangle is the same.",
+    matrixNote: (N) => `Token resolution, $S = ${STRIPE_L * N}$ tokens. GPU $r$ owns tokens $2r, 2r{+}1$ near the top (few keys) and $${STRIPE_L * N - 2}{-}2r, ${STRIPE_L * N - 1}{-}2r$ near the bottom (many keys), so every GPU's share of the triangle is the same.`,
     workNote: (N) => `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$). Every step costs 2 on every GPU: wall time $2N = ${2 * N}$, no idle time. Same bar scale as the ring view.`,
   },
   stripe: {

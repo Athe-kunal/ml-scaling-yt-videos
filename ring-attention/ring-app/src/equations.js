@@ -1,4 +1,4 @@
-import { DEV_COLORS, mod, deviceStep, covered, ownChunks } from "./ringModel";
+import { DEV_COLORS, mod, deviceStep, covered, ownChunks, tokensOf, seqLen } from "./ringModel";
 
 // Equations for the selected GPU r at the current phase, numbers plugged in.
 // Items are { p: html-with-$math$ } or { m: display tex }.
@@ -32,6 +32,7 @@ export function equations(variant, N, r, phase) {
       M(String.raw`Q_{r} = \big[\,Q_{c_{r}}\,;\,Q_{c_{2N-1-r}}\big] = \big[\,Q_{c_{${a}}}\,;\,Q_{c_{${b}}}\big]`);
       P(String.raw`Same for $K, V$. Inside a shard the order is still increasing ($c_{${a}} < c_{${b}}$), which is what lets step 0 use an ordinary causal mask. <code>q1 = q[:, L/2:]</code> is the late half $Q_{c_{${b}}}$.`);
     }
+    P(`With a toy sequence of $S = ${seqLen(N)}$ tokens (ids $0..${seqLen(N) - 1}$), GPU ${r} holds tokens ${"$"}\\{${tokensOf(variant, N, r).join(",")}\\}${"$"}${variant === "stripe" ? "" : " (chunk $c_i$ = tokens $2i, 2i+1$)"}.`);
     P("Accumulators start empty: <code>out = lse = None</code>.");
     return out;
   }
@@ -157,8 +158,7 @@ export function transfers(variant, N, phase) {
   if (!["send", "compute", "merge", "wait"].includes(type) || s >= N - 1) return [];
   return Array.from({ length: N }, (_, i) => {
     const j = mod(i - s, N);
-    const [c0, c1] = ownChunks(variant, N, j);
-    const tex = variant === "stripe" ? String.raw`[K,V]_{${j}::${N}}` : String.raw`[K,V]_{c_{${c0}}, c_{${c1}}}`;
+    const tex = String.raw`[K,V]_{\{${tokensOf(variant, N, j).join(",")}\}}`;
     return { from: i, to: mod(i + 1, N), j, tex: col(j, tex) };
   });
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { T, mono, sans } from "./theme";
 import { katexHtml } from "./latex";
-import { DEV_COLORS, PHASE, STEP_PHASES, buildPhases, deviceStep, heldKV, mod, ownChunks, shardLabel, STRIPE_L } from "./ringModel";
+import { DEV_COLORS, PHASE, STEP_PHASES, buildPhases, deviceStep, heldKV, mod, tokensOf, shardLabel, STRIPE_L } from "./ringModel";
 import { COPY, codeFocus, variables } from "./ringLogic";
 import { CodeBlock } from "./CodePanel";
 import { panel, h2, chip, navBtn } from "./styles";
@@ -79,9 +79,7 @@ function Transfers({ variant, N, phase, sel }) {
 
 // Which tokens a KV shard holds, in words (for S = 4N tokens, chunk = 2 tokens).
 function tokenPreview(variant, N, j) {
-  if (variant === "stripe") return `tokens ${ownChunks("stripe", N, j).join(",")}`;
-  const [a, b] = ownChunks("zigzag", N, j);
-  return `tokens ${2 * a}-${2 * a + 1}, ${2 * b}-${2 * b + 1}`;
+  return `tokens ${tokensOf(variant, N, j).join(",")}`;
 }
 
 function DiffTable({ N, phase, sel }) {

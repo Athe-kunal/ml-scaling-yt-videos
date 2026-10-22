@@ -1,5 +1,5 @@
 import { T, mono } from "./theme";
-import { DEV_COLORS, PHASE, mod, sub, deviceStep, heldKV, inFlight, ownChunks, shardLabel } from "./ringModel";
+import { DEV_COLORS, PHASE, mod, deviceStep, heldKV, inFlight, shardLabel, tokensOf } from "./ringModel";
 
 // N GPUs on a circle, clockwise arcs r -> r+1 (send_rank). Each box shows
 // the stationary Q shard and the KV block currently in `k, v`; packets ride
@@ -23,7 +23,7 @@ function statusText(variant, N, r, phase) {
   if (type === "init") return { t: "Q, K, V local", c: T.dim };
   if (type === "final") return { t: "out ready", c: T.soft };
   const d = deviceStep(variant, N, r, s);
-  if (type === "send") return { t: `isend ${shardLabel(variant, N, d.j, "KV")} → ${mod(r + 1, N)}`, c: T.wire };
+  if (type === "send") return { t: `isend k, v → GPU ${mod(r + 1, N)}`, c: T.wire };
   if (type === "wait") return { t: "k, v = next_k, next_v", c: T.wire };
   if (!d.active) return { t: "idle · masked", c: T.bad };
   if (type === "merge") return { t: d.branch === "hi" ? (variant === "stripe" ? "merge out[1:]" : "merge out[L/2:]") : s === 0 ? "out = block_out" : "merge out, lse", c: T.accent2 };
@@ -100,13 +100,14 @@ export default function RingDiagram({ variant, N, phase, sel, onSel }) {
         const working = d && (phase.type === "compute" || phase.type === "merge");
         const qOn = (i) => !working || d.useQ.includes(i);
         const kOn = (i) => !working || d.useKV.includes(i);
-        const qc = ownChunks(variant, N, r);
-        const kc = ownChunks(variant, N, held);
+        // token ids per chip: zig-zag keeps its two halves apart (k0/q1 dim one)
+        const split = (ts) => (variant === "zigzag" ? [ts.slice(0, 2), ts.slice(2)] : [ts]);
+        const qc = split(tokensOf(variant, N, r)).map((ts) => ts.join(","));
+        const kc = split(tokensOf(variant, N, held)).map((ts) => ts.join(","));
         const st = statusText(variant, N, r, phase);
         const isSel = r === sel;
         const tag = r === prev && r === next ? "prev = next" : r === prev ? "prev · recv_rank" : r === next ? "next · send_rank" : null;
-        const stripe = variant === "stripe";
-        const chipW = stripe ? 86 : 40;
+        const chipW = variant === "zigzag" ? 42 : 88;
         return (
           <g key={r} onClick={() => onSel(r)} style={{ cursor: "pointer" }}>
             <rect
@@ -119,12 +120,12 @@ export default function RingDiagram({ variant, N, phase, sel, onSel }) {
             <text x={bx + BW - 9} y={by + 16} textAnchor="end" fontFamily={mono} fontSize="9.5" fill={T.dim}>rank {r}</text>
 
             <text x={bx + 9} y={by + 37} fontFamily={mono} fontSize="9.5" fill={T.dim}>q</text>
-            {(stripe ? [shardLabel(variant, N, r, "Q")] : qc.map((c) => `Q${sub(c)}`)).map((label, i) => (
+            {qc.map((label, i) => (
               <Chip key={i} x={bx + 30 + i * (chipW + 6)} y={by + 25} w={chipW} label={label} color={col} on={qOn(i)} />
             ))}
 
             <text x={bx + 9} y={by + 59} fontFamily={mono} fontSize="9.5" fill={T.dim}>kv</text>
-            {(stripe ? [shardLabel(variant, N, held, "KV")] : kc.map((c) => `KV${sub(c)}`)).map((label, i) => (
+            {kc.map((label, i) => (
               <Chip key={`${held}-${i}`} x={bx + 30 + i * (chipW + 6)} y={by + 47} w={chipW} label={label} color={DEV_COLORS[held]} on={kOn(i)} />
             ))}
 
@@ -145,7 +146,7 @@ export default function RingDiagram({ variant, N, phase, sel, onSel }) {
         const j = mod(r - phase.s, N);
         const [px, py] = arcPt(r, landed ? 1 : tProg);
         const lbl = shardLabel(variant, N, j, "KV");
-        const w = 64;
+        const w = Math.max(64, lbl.length * 6.6 + 14);
         const hot = r === sel || r === prev;
         return (
           <g

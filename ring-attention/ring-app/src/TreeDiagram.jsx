@@ -1,6 +1,6 @@
 import { T, mono } from "./theme";
 import { DEV_COLORS } from "./ringModel";
-import { TREE_PHASE, log2, fmt } from "./treeModel";
+import { TREE_PHASE, PER, log2, fmt } from "./treeModel";
 
 // Binomial reduction tree. Leaves = GPUs (bottom), node (lvl, k) = result
 // over GPUs [k 2^lvl, (k+1) 2^lvl), held by GPU k 2^lvl. Its left child has
@@ -8,7 +8,7 @@ import { TREE_PHASE, log2, fmt } from "./treeModel";
 
 const W = 700;
 const LVL_H = 74;
-const LEAF_H = 86;
+const LEAF_H = 92;
 const NODE_W = 92;
 const NODE_H = 30;
 
@@ -64,23 +64,30 @@ export default function TreeDiagram({ N, phase, state, data, sel, onSel }) {
         const lvl = i + 1;
         const on = isComm && phase.lvl === lvl;
         return (
-          <text key={lvl} x={4} y={nodeY(lvl) + 19} fontFamily={mono} fontSize="10" fill={on ? pc : T.dim}>
-            {`lvl ${lvl} · step ${2 ** (lvl - 1)}`}
+          <text key={lvl} x={4} y={nodeY(lvl) - 6} fontFamily={mono} fontSize="9.5" fill={on ? pc : T.dim}>
+            {`level ${lvl} · step ${2 ** (lvl - 1)}`}
           </text>
         );
       })}
 
+      {/* direction of the current collective */}
+      {isComm && (
+        <text x={W - 4} y={14} textAnchor="end" fontFamily={mono} fontSize="10.5" fontWeight="700" fill={pc}>
+          {phase.type === "up" ? "reduce: data flows ↑ to GPU 0" : "broadcast: result flows ↓ to everyone"}
+        </text>
+      )}
+
       {/* edges */}
       {edges.map((e) => {
         const up = phase.type === "up";
-        const color = e.msg ? pc : e.live ? T.dim : T.rule;
+        const color = e.msg ? pc : T.dim;
         const [sx, sy, tx, ty] = up || !e.msg ? [e.x1, e.y1, e.x2, e.y2] : [e.x2, e.y2, e.x1, e.y1];
         return (
           <line
             key={e.key} x1={sx} y1={sy} x2={tx} y2={ty}
             stroke={color} strokeWidth={e.msg ? 2.4 : 1.2}
             strokeDasharray={e.side === 0 ? "4 4" : "none"}
-            opacity={e.live ? 1 : 0.5}
+            opacity={e.live ? 1 : 0.45}
             markerEnd={e.msg ? `url(#tree-${phase.type})` : undefined}
             style={{ transition: "all .3s" }}
           />
@@ -133,19 +140,26 @@ export default function TreeDiagram({ N, phase, state, data, sel, onSel }) {
         })
       )}
 
-      {/* leaves = GPUs */}
+      {/* leaves = GPUs: tokens, the allreduce buffer, and whose data it already includes */}
       {Array.from({ length: N }, (_, i) => {
         const x = cx(i, i + 1) - leafW / 2;
         const g = data.gpus[i], s = state.gpus[i];
         const col = DEV_COLORS[i];
         const isSel = i === sel;
         const involved = isComm && state.msgs.some((m) => m.from === i || m.to === i);
+        const small = N > 4;
+        const fs = small ? 9 : 10.5;
+        const toks = Array.from({ length: PER }, (_, t) => PER * i + t);
+        const inSum = phase.type === "rescale" || phase.op === "sum" || phase.type === "final";
+        const bufName = inSum ? "den" : "lse_max";
+        const bufVal = inSum ? s.den : s.mx;
+        const all = s.cov === (1 << N) - 1;
         const rows = [];
-        rows.push([`keys ${i * 3}..${i * 3 + 2}`, T.dim]);
+        rows.push([small ? `t${toks[0]}–${toks[PER - 1]}` : `tokens ${toks.join(",")}`, T.dim]);
         if (s.local) rows.push([`lse ${fmt(g.lse)}`, T.accent]);
-        if (phase.type === "up" && phase.op === "max" || phase.type === "down" && phase.op === "max") rows.push([`m ${fmt(s.mx)}${s.got ? " ✓" : ""}`, T.wire]);
-        if (phase.type === "rescale" || phase.op === "sum") rows.push([`d ${fmt(s.den)}${s.got ? " ✓" : ""}`, T.accent2]);
-        if (phase.type === "final") rows.push(["out ✓ exact", T.accent]);
+        if (phase.type === "final") rows.push(["out = n/d ✓", T.accent]);
+        else if (s.local) rows.push([s.changed ? `${fmt(s.prevVal)}→${fmt(bufVal)}` : `${small ? (inSum ? "d" : "m") : bufName} ${fmt(bufVal)}`, s.changed ? pc : inSum ? T.accent2 : T.wire]);
+        const sq = Math.min(9, (leafW - 16) / N - 1);
         return (
           <g key={i} onClick={() => onSel(i)} style={{ cursor: "pointer" }}>
             <rect
@@ -154,9 +168,18 @@ export default function TreeDiagram({ N, phase, state, data, sel, onSel }) {
               style={{ transition: "all .3s" }}
             />
             <text x={x + 8} y={leafY + 16} fontFamily={mono} fontSize="11" fontWeight="700" fill={col}>GPU {i}</text>
+            {all && s.local && phase.type !== "local" && <text x={x + leafW - 7} y={leafY + 16} textAnchor="end" fontFamily={mono} fontSize="11" fontWeight="700" fill={T.accent}>✓</text>}
             {rows.map(([t, c], r) => (
-              <text key={r} x={x + 8} y={leafY + 33 + r * 15} fontFamily={mono} fontSize={N > 4 ? 9 : 10.5} fill={c}>{t}</text>
+              <text key={r} x={x + 8} y={leafY + 33 + r * 15} fontFamily={mono} fontSize={fs} fill={c}>{t}</text>
             ))}
+            {s.local && phase.type !== "final" && (
+              <g>
+                {Array.from({ length: N }, (_, k) => (
+                  <rect key={k} x={x + 8 + k * (sq + 1)} y={leafY + LEAF_H - 15} width={sq} height={8} rx={1.5}
+                    fill={s.cov & (1 << k) ? DEV_COLORS[k] : "transparent"} stroke={s.cov & (1 << k) ? "none" : T.rule} strokeWidth={0.8} />
+                ))}
+              </g>
+            )}
           </g>
         );
       })}

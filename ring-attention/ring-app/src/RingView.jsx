@@ -144,9 +144,9 @@ export default function RingView({ variant }) {
           <div className="ra-two">
             <section style={panel}>
               <div style={h2}>Causal attention matrix</div>
-              <SequenceStrip variant={variant} N={N} />
+              <SequenceStrip variant={variant} N={N} tokens />
               <div style={{ height: 12 }} />
-              <AttentionMatrix variant={variant} N={N} phase={phase} sel={sel} />
+              <AttentionMatrix variant={variant} N={N} phase={phase} sel={sel} tokens />
               <Rich
                 style={{ fontSize: 12.5, color: T.dim, marginTop: 8, lineHeight: 1.5 }}
                 html={copy.matrixNote(N)}
