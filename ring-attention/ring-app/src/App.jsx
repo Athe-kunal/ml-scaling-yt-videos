@@ -2,6 +2,7 @@ import { useState } from "react";
 import { T, mono } from "./theme";
 import RingView from "./RingView";
 import TreeView from "./TreeView";
+import TreeFirstPrinciples from "./TreeFirstPrinciples";
 import CompareView from "./CompareView";
 import ShardingView from "./ShardingView";
 import DistributeView from "./DistributeView";
@@ -13,6 +14,7 @@ const VIEWS = [
   { id: "zigzag", label: "Zig-zag ring attention", sub: "chunks r and 2N-1-r · balanced" },
   { id: "stripe", label: "Stripe attention", sub: "token t on GPU t mod N · shifted mask" },
   { id: "compare", label: "Zig-zag vs Stripe", sub: "one stepper · both side by side" },
+  { id: "treefp", label: "Tree attention · first principles", sub: "7 steps from the paper" },
   { id: "tree", label: "Tree attention", sub: "decoding · allreduce in log N" },
 ];
 
@@ -35,7 +37,7 @@ export default function App() {
           );
         })}
       </nav>
-      {view === "dist" ? <DistributeView /> : view === "shard" ? <ShardingView /> : view === "tree" ? <TreeView /> : view === "compare" ? <CompareView /> : <RingView key={view} variant={view} />}
+      {view === "treefp" ? <TreeFirstPrinciples /> : view === "dist" ? <DistributeView /> : view === "shard" ? <ShardingView /> : view === "tree" ? <TreeView /> : view === "compare" ? <CompareView /> : <RingView key={view} variant={view} />}
     </div>
   );
 }
