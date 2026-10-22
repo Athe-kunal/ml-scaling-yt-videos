@@ -3,8 +3,12 @@ import { T, mono } from "./theme";
 import RingView from "./RingView";
 import TreeView from "./TreeView";
 import CompareView from "./CompareView";
+import ShardingView from "./ShardingView";
+import DistributeView from "./DistributeView";
 
 const VIEWS = [
+  { id: "dist", label: "Q, K, V → GPUs", sub: "animated layouts · 3 causal matrices" },
+  { id: "shard", label: "Sharding", sub: "who gets which tokens · extract_local" },
   { id: "ring", label: "Ring attention", sub: "contiguous blocks · causal imbalance" },
   { id: "zigzag", label: "Zig-zag ring attention", sub: "chunks r and 2N-1-r · balanced" },
   { id: "stripe", label: "Stripe attention", sub: "token t on GPU t mod N · shifted mask" },
@@ -13,7 +17,7 @@ const VIEWS = [
 ];
 
 export default function App() {
-  const [view, setView] = useState("ring");
+  const [view, setView] = useState("dist");
   return (
     <div style={{ minHeight: "100vh", background: T.bg }}>
       <nav style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "16px clamp(16px, 3vw, 36px) 0", maxWidth: 1480, margin: "0 auto" }}>
@@ -31,7 +35,7 @@ export default function App() {
           );
         })}
       </nav>
-      {view === "tree" ? <TreeView /> : view === "compare" ? <CompareView /> : <RingView key={view} variant={view} />}
+      {view === "dist" ? <DistributeView /> : view === "shard" ? <ShardingView /> : view === "tree" ? <TreeView /> : view === "compare" ? <CompareView /> : <RingView key={view} variant={view} />}
     </div>
   );
 }

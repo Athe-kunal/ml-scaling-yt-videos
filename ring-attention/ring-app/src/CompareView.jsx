@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { T, mono, sans } from "./theme";
-import { katexHtml } from "./latex";
 import { DEV_COLORS, PHASE, STEP_PHASES, buildPhases, deviceStep, heldKV, mod, tokensOf, shardLabel, STRIPE_L } from "./ringModel";
-import { COPY, codeFocus, variables } from "./ringLogic";
+import { COPY, codeFocus, codeNotes } from "./ringLogic";
+import { RankPicker } from "./RingView";
 import { CodeBlock } from "./CodePanel";
 import { panel, h2, chip, navBtn } from "./styles";
-import { Rich, Tex } from "./ui";
+import { Rich } from "./ui";
 import RingDiagram from "./RingDiagram";
 import AttentionMatrix, { SequenceStrip, WorkChart } from "./AttentionMatrix";
-import { equations, transfers } from "./equations";
 
 // Zig-zag and stripe driven by one stepper: same ring, same phases, so each
 // "next" shows what moves and what each kernel computes in both, side by side.
@@ -44,35 +43,6 @@ function SideHead({ side, extra }) {
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
       <span style={{ fontFamily: mono, fontSize: 13, fontWeight: 700, color: side.color, letterSpacing: 0.5 }}>{side.name}</span>
       {extra}
-    </div>
-  );
-}
-
-function Transfers({ variant, N, phase, sel }) {
-  const xs = transfers(variant, N, phase);
-  if (!xs.length) {
-    return (
-      <div style={{ fontFamily: mono, fontSize: 12, color: T.dim }}>
-        {phase.type === "init" ? "No transfers yet." : phase.type === "final" ? `Done: ${N - 1} hops per GPU.` : "Last step: nothing sent."}
-      </div>
-    );
-  }
-  return (
-    <div style={{ display: "grid", gap: 4 }}>
-      {xs.map((x) => {
-        const hot = x.from === sel || x.to === sel;
-        return (
-          <div key={x.from} style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: mono, fontSize: 11.5, padding: "3px 9px", borderRadius: 6,
-            background: hot ? `${T.wire}14` : T.well, border: `1px solid ${hot ? `${T.wire}66` : T.rule}` }}>
-            <span style={{ color: DEV_COLORS[x.from], width: 44 }}>GPU {x.from}</span>
-            <span style={{ color: T.wire }}>→</span>
-            <span dangerouslySetInnerHTML={{ __html: katexHtml(x.tex) }} />
-            <span style={{ color: T.wire }}>→</span>
-            <span style={{ color: DEV_COLORS[x.to] }}>GPU {x.to}</span>
-            <span style={{ marginLeft: "auto", color: T.dim, fontSize: 10.5 }}>{tokenPreview(variant, N, x.j)}</span>
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -138,20 +108,6 @@ function DiffTable({ N, phase, sel }) {
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-function Vars({ variant, N, phase, sel }) {
-  const vars = variables(variant, N, phase, sel);
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "max-content 1fr", columnGap: 14, rowGap: 3, fontFamily: mono, fontSize: 12 }}>
-      {vars.map(([k, v]) => (
-        <div key={k} style={{ display: "contents" }}>
-          <span style={{ color: T.dim }}>{k}</span>
-          <span style={{ color: T.ink }}>{String(v)}</span>
-        </div>
-      ))}
     </div>
   );
 }
@@ -255,8 +211,6 @@ export default function CompareView() {
             <section key={sd.v} style={panel}>
               <SideHead side={sd} />
               <RingDiagram variant={sd.v} N={N} phase={phase} sel={sel} onSel={setSel} />
-              <div style={{ height: 8 }} />
-              <Transfers variant={sd.v} N={N} phase={phase} sel={sel} />
             </section>
           ))}
         </Pair>
@@ -274,12 +228,8 @@ export default function CompareView() {
           {SIDES.map((sd) => {
             const focus = codeFocus(sd.v, N, phase, sel);
             return (
-              <div key={sd.v} style={{ display: "grid", gap: 12, minWidth: 0, alignContent: "start" }}>
-                <CodeBlock title={COPY[sd.v].src[0]} lines={COPY[sd.v].src[1]} focus={focus.main} maxHeight={430} note={`following GPU ${sel}`} />
-                <div style={{ ...panel, padding: "10px 14px" }}>
-                  <SideHead side={sd} extra={<span style={{ fontFamily: mono, fontSize: 11, color: T.dim }}>live variables · rank {sel}</span>} />
-                  <Vars variant={sd.v} N={N} phase={phase} sel={sel} />
-                </div>
+              <div key={sd.v} style={{ minWidth: 0 }}>
+                <CodeBlock title={COPY[sd.v].src[0]} lines={COPY[sd.v].src[1]} focus={focus.main} notes={codeNotes(sd.v, N, phase, sel).main} maxHeight={470} note={<RankPicker N={N} sel={sel} onSel={setSel} />} />
               </div>
             );
           })}
@@ -298,16 +248,6 @@ export default function CompareView() {
           ))}
         </Pair>
 
-        <Pair title={`Equations · GPU ${sel} at this phase`}>
-          {SIDES.map((sd) => (
-            <section key={sd.v} style={panel}>
-              <SideHead side={sd} />
-              <div style={{ display: "grid", gap: 6, color: T.soft, fontSize: 14, lineHeight: 1.6 }}>
-                {equations(sd.v, N, sel, phase).map((e, i) => (e.m ? <Tex key={i} tex={e.m} /> : <Rich key={i} html={e.p} />))}
-              </div>
-            </section>
-          ))}
-        </Pair>
       </div>
 
     </div>

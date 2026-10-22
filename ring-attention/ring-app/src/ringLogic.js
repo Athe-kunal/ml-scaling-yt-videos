@@ -1,8 +1,8 @@
 import { T } from "./theme";
-import { PHASE, STEP_PHASES, shardLabel, STRIPE_L, deviceStep, heldKV, inFlight, mod, covered } from "./ringModel";
+import { PHASE, STRIPE_L, deviceStep, inFlight, mod, covered, tokensOf } from "./ringModel";
 import { RING_SRC, ZIGZAG_SRC, STRIPE_SRC, UTILS_SRC, ZIGZAG_UTILS_SRC, STRIPE_UTILS_SRC } from "./codeSources";
 
-// Per-variant copy, code highlighting and live variables for the ring family
+// Per-variant copy, code highlighting and live code comments for the ring family
 // (ring / zigzag / stripe). Shared by RingView and CompareView.
 
 export const COPY = {
@@ -13,7 +13,6 @@ export const COPY = {
     src: ["ring_flash_attn.py", RING_SRC, 430],
     utils: ["utils.py", UTILS_SRC],
     matrixNote: (N) => `Token resolution, $S = ${STRIPE_L * N}$ tokens. GPU $r$ owns tokens $4r..4r+3$ (thick lines = 2-token chunks). GPU 0's rows have almost nothing to the left of the diagonal; GPU ${N - 1}'s rows see the whole sequence. White outline = the GPU you follow.`,
-    workNote: (N) => `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$). A step lasts as long as its slowest GPU. Step 0 costs 2, every later step 4 (a full block on GPU ${N - 1}), so wall time is $4N-2 = ${4 * N - 2}$ against an ideal $2N = ${2 * N}$.`,
   },
   zigzag: {
     eyebrow: "SEQUENCE PARALLELISM · ZIG-ZAG RING ATTENTION",
@@ -22,7 +21,6 @@ export const COPY = {
     src: ["zigzag_ring_flash_attn.py", ZIGZAG_SRC, 470],
     utils: ["extract_local + utils.py", ZIGZAG_UTILS_SRC],
     matrixNote: (N) => `Token resolution, $S = ${STRIPE_L * N}$ tokens. GPU $r$ owns tokens $2r, 2r{+}1$ near the top (few keys) and $${STRIPE_L * N - 2}{-}2r, ${STRIPE_L * N - 1}{-}2r$ near the bottom (many keys), so every GPU's share of the triangle is the same.`,
-    workNote: (N) => `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$). Every step costs 2 on every GPU: wall time $2N = ${2 * N}$, no idle time. Same bar scale as the ring view.`,
   },
   stripe: {
     eyebrow: "SEQUENCE PARALLELISM · STRIPE ATTENTION",
@@ -31,7 +29,6 @@ export const COPY = {
     src: ["stripe_flash_attn.py", STRIPE_SRC, 470],
     utils: ["extract_local + utils.py", STRIPE_UTILS_SRC],
     matrixNote: (N) => `Token resolution: $S = ${STRIPE_L}N = ${STRIPE_L * N}$ tokens, row $t$ belongs to GPU $t \\bmod ${N}$. Every GPU's rows are spread evenly down the triangle. A step fills $\\tfrac{L(L+1)}{2}$ cells (from an earlier rank) or $\\tfrac{L(L-1)}{2}$ (later rank): with $L=${STRIPE_L}$ that is ${(STRIPE_L * (STRIPE_L + 1)) / 2}$ vs ${(STRIPE_L * (STRIPE_L - 1)) / 2}$, but both tend to $L^2/2$ as $L$ grows.`,
-    workNote: (N) => `Units = chunk² ($\\tfrac{L}{2}\\times\\tfrac{L}{2}$), large-$L$ limit: every step costs $L^2/2 = 2$ on every GPU, wall time $2N = ${2 * N}$. The leftover imbalance is one token's diagonal, $L$ cells per step, negligible for long sequences.`,
   },
 };
 
@@ -84,35 +81,131 @@ export function codeFocus(variant, N, phase, r) {
   return { main, utils };
 }
 
-export function variables(variant, N, phase, r) {
-  const { type, s } = phase;
-  const kvLbl = (j) => shardLabel(variant, N, j, "KV");
-  const rows = [
-    ["comm.rank", r],
-    ["comm.send_rank", `${mod(r + 1, N)}  (next)`],
-    ["comm.recv_rank", `${mod(r - 1, N)}  (prev)`],
-    ["step", type === "init" ? "—" : type === "final" ? `${N - 1} (done)` : s],
-    ["k, v", kvLbl(heldKV(N, r, phase))],
+// Live comments for the attention code at this phase, for GPU r: what each
+// executed line evaluates to, with explicit token ids. Returns notes for the
+// main forward function and for utils.py (see CodeBlock `notes`).
+export function codeNotes(variant, N, phase, r) {
+  const { main, utils } = phaseNotes(variant, N, phase, r);
+  const sh = shapeNotes(variant, tokensOf(variant, N, r).length);
+  return { main: [...main, ...sh.main], utils: [...utils, ...sh.utils] };
+}
+
+// Permanent comments on every squeeze / unsqueeze / transpose of the lse,
+// spelled out as einops. Layouts follow flash-attn: out is [B, L, H, D],
+// the kernel's lse is [B, H, L]; the running lse is kept as [B, L, H, 1] so it
+// broadcasts against out.
+function shapeNotes(variant, L) {
+  const n = (m, t, after) => ({ m, t, after });
+  // what the flash-attn kernel computes, written as einsum (S = keys in the block)
+  const kernel = (m, after, qn = "q", kn = "k", vn = "v") => [
+    n(m, `scores = einsum("blhd,bshd->bhls", ${qn}, ${kn}) * softmax_scale   # q·kᵀ → [B, H, L, S]`, after),
+    n(m, `p = softmax(scores + mask, dim=-1);  block_lse = logsumexp(scores + mask, dim=-1)   # [B, H, L]`, after),
+    n(m, `block_out = einsum("bhls,bshd->blhd", p, ${vn})   # p·v → [B, L, H, D]`, after),
   ];
-  if (inFlight(N, phase)) rows.push(["next_k, next_v", `← ${kvLbl(mod(r - s - 1, N))} (in flight)`]);
-  else if (type === "wait") rows.push(["next_k, next_v", `${kvLbl(mod(r - s - 1, N))} (landed)`]);
-  else rows.push(["next_k, next_v", type === "init" ? "None" : "—"]);
-  if (STEP_PHASES.includes(type)) {
-    const d = deviceStep(variant, N, r, s);
-    if (variant === "ring") {
-      rows.push(["step <= comm.rank", `${s} <= ${r} → ${s <= r}`]);
-      rows.push(["causal and step == 0", `${s === 0}`]);
-    } else if (variant === "stripe") {
-      rows.push(["step <= comm.rank", `${s} <= ${r} → ${s <= r}`]);
-      rows.push(["kernel inputs", d.branch === "lo" ? "q, k, v  causal" : "q[:,1:], k[:,:-1], v[:,:-1]  causal"]);
-      rows.push(["slice_", d.branch === "hi" ? "(:, 1:)" : "None"]);
+  const kernels = variant === "stripe"
+    ? [...kernel("block_out, block_lse = _flash_attn_forward(**params)"), ...kernel("block_out, block_lse = _flash_attn_forward(**params)", "else:", "q[:, 1:]", "k[:, :-1]", "v[:, :-1]")]
+    : kernel("block_out, block_lse = _flash_attn_forward");
+  return {
+    main: [
+      ...kernels,
+      n("lse = lse.squeeze(dim=-1).transpose(1, 2)", `[B, L=${L}, H, 1] → squeeze(-1) drops the size-1 last dim → [B, ${L}, H] → transpose(1, 2) → [B, H, ${L}]  ≡  rearrange(lse, "b l h 1 -> b h l")`),
+    ],
+    utils: [
+      n("block_lse = block_lse.transpose(-2, -1).unsqueeze(dim=-1)", `kernel lse [B, H, L] → transpose(-2, -1) → [B, L, H] → unsqueeze(-1) adds a size-1 dim → [B, L, H, 1]  ≡  rearrange(block_lse, "b h l -> b l h 1")`),
+      n("out = out - F.sigmoid(block_lse - lse) * (out - block_out)", `σ is [B, L, H, 1]: the size-1 dim broadcasts over D  ≡  out − einsum("blh,blhd->blhd", σ[..., 0], out − block_out)`),
+      n("lse = block_lse.transpose(-2, -1).unsqueeze(dim=-1)", `first block: [B, H, L] → [B, L, H, 1]  ≡  rearrange(block_lse, "b h l -> b l h 1")`, "if out is None:"),
+    ],
+  };
+}
+
+function phaseNotes(variant, N, phase, r) {
+  const { type, s } = phase;
+  const n = (m, t, after) => ({ m, t, after });
+  const nxt = mod(r + 1, N), prv = mod(r - 1, N);
+  const tk = (j) => tokensOf(variant, N, j);
+  const T = (ts) => `t[${ts.join(",")}]`;
+  const qT = tk(r);
+  const L = qT.length;
+  const main = [n("comm = RingComm(process_group)", `rank ${r} of ${N}: sends to ${nxt}, receives from ${prv}`)];
+  const utils = [
+    n("self.send_rank = (self.rank + 1)", `(${r} + 1) % ${N} = ${nxt}`),
+    n("self.recv_rank = (self.rank - 1)", `(${r} − 1) % ${N} = ${prv}`),
+  ];
+  if (variant === "zigzag") {
+    main.push(n("block_seq_len = q.shape[1] // 2", `${L} // 2 = ${L / 2}`));
+    main.push(n("q1 = q[:, block_seq_len:]", `late half of q = ${T(qT.slice(L / 2))}`));
+  }
+  if (type === "init") {
+    main.push(n("out = None", `q = ${T(qT)}, k, v = ${T(qT)}; nothing merged yet`));
+    return { main, utils };
+  }
+  if (type === "final") {
+    const js = covered(variant, N, r, phase);
+    main.push(n("out = out.to(q.dtype)", `[${L}, H, D] for q ${T(qT)}, merged over KV from GPU${js.length > 1 ? "s" : ""} ${js.join(", ")}`));
+    return { main, utils };
+  }
+
+  const d = deviceStep(variant, N, r, s);
+  const j = d.j, jn = mod(r - s - 1, N);
+  const kT = tk(j);
+  const last = s === N - 1;
+  main.push(n("for step in range(comm.world_size)", `step = ${s}  (k, v held: ${T(kT)} from GPU ${j})`));
+  main.push(n("if step + 1 != comm.world_size", `${s} + 1 != ${N} → ${!last}${last ? ": last step, nothing to send" : ""}`));
+  if (!last) {
+    main.push(n("next_k, next_v = comm.send_recv_kv(k, v)", `send ${T(kT)} → GPU ${nxt}; receive ${T(tk(jn))} ← GPU ${prv}`));
+    utils.push(n("send_op = dist.P2POp(", `isend ${T(kT)} → GPU ${nxt}`));
+    utils.push(n("recv_op = dist.P2POp", `irecv ${T(tk(jn))} ← GPU ${prv}`));
+  }
+  const js = covered(variant, N, r, { type: "merge", s });
+  const mergeText = s === 0 ? "first block: out, lse = block_out, block_lse" : `out now covers KV from GPUs ${js.join(", ")}`;
+
+  if (variant === "ring") {
+    main.push(n("if not causal or step <= comm.rank", `${s} <= ${r} → ${d.active}${d.active ? "" : `: keys ${T(kT)} are all after queries ${T(qT)}, skip`}`));
+    if (d.active) {
+      main.push(n('"causal": causal and step == 0', `step == 0 → ${s === 0}${s === 0 ? " (diagonal block)" : " (all keys earlier, no mask)"}`));
+      main.push(n("block_out, block_lse = _flash_attn_forward", `q ${T(qT)} × k ${T(kT)}`));
+      main.push(n("out, lse = update_out_and_lse", mergeText));
+    }
+  } else if (variant === "zigzag") {
+    main.push(n("if step == 0:", `${s} == 0 → ${s === 0}`));
+    if (d.branch === "0") {
+      main.push(n("forward(q, k, v, causal=True)", `q ${T(qT)} × k ${T(kT)}, causal`));
+      main.push(n("out, lse = update_out_and_lse", mergeText, "if step == 0:"));
     } else {
-      rows.push(["branch", d.branch === "0" ? "step == 0" : d.branch === "lo" ? `step <= rank (${s} <= ${r})` : `else (${s} > ${r})`]);
-      rows.push(["kernel inputs", d.branch === "0" ? "q, k, v  causal" : d.branch === "lo" ? "q, k0, v0" : "q1, k, v"]);
-      rows.push(["slice_", d.branch === "hi" ? "(:, L/2:)" : "None"]);
+      main.push(n("elif step <= comm.rank", `${s} <= ${r} → ${d.branch === "lo"}`));
+      if (d.branch === "lo") {
+        main.push(n("k0 = k[:, :block_seq_len]", `early half of k = ${T(kT.slice(0, L / 2))}`));
+        main.push(n("forward(q, k0, v0, causal=False)", `q ${T(qT)} × k0 ${T(kT.slice(0, L / 2))}, no mask`));
+        main.push(n("out, lse = update_out_and_lse", mergeText, "elif step <= comm.rank"));
+      } else {
+        main.push(n("forward(q1, k, v, causal=False)", `q1 ${T(qT.slice(L / 2))} × k ${T(kT)}, no mask`));
+        main.push(n("slice_=(slice(None), slice(block_seq_len, None))", `only rows of q1 ${T(qT.slice(L / 2))} change`));
+        utils.push(n("slice_out, slice_lse = out[slice_]", `rows ${L / 2}: (q1)`));
+      }
+    }
+  } else {
+    main.push(n("if step <= comm.rank:", `${s} <= ${r} → ${d.branch === "lo"}`));
+    if (d.branch === "lo") {
+      main.push(n('"q": q,', T(qT)));
+      main.push(n('"k": k,', T(kT)));
+      main.push(n("block_out, block_lse = _flash_attn_forward(**params)", "causal: key p′ ≤ query p"));
+      main.push(n("out, lse = update_out_and_lse(out, lse, block_out, block_lse)", mergeText));
+    } else {
+      main.push(n('"q": q[:, 1:],', `${T(qT.slice(1))} (drop ${qT[0]})`));
+      main.push(n('"k": k[:, :-1],', `${T(kT.slice(0, -1))} (drop ${kT[kT.length - 1]})`));
+      main.push(n("block_out, block_lse = _flash_attn_forward(**params)", "causal, shifted by one: key p′ ≤ p − 1", "else:"));
+      main.push(n("slice(1, None)", `rows 1: (all but ${qT[0]})`, "else:"));
+      utils.push(n("slice_out, slice_lse = out[slice_]", "rows 1:"));
     }
   }
-  const js = covered(variant, N, r, phase);
-  rows.push(["out covers", js.length ? js.map(kvLbl).join("  ") : "None"]);
-  return rows;
+  if (type === "merge" && d.active) {
+    if (s === 0) utils.push(n("out = block_out.to(torch.float32)", "first block, just store it", "if out is None:"));
+    else utils.push(n("out = out - F.sigmoid(block_lse - lse)", "reweight old out vs new block by their lse"));
+  }
+  if (type === "wait") {
+    main.push(n("comm.wait()", `block until ${T(tk(jn))} has arrived from GPU ${prv}`));
+    main.push(n("k, v = next_k, next_v", `k, v = ${T(tk(jn))}`));
+    utils.push(n("req.wait()", "the isend and irecv for k and for v"));
+  }
+  return { main, utils };
 }

@@ -33,14 +33,32 @@ function pyHtml(line) {
   return html;
 }
 
-export function CodeBlock({ title, lines, focus, maxHeight, note }) {
+// Live comments: notes = [{ m, t, after? }]. Each note attaches to the first
+// line containing `m` (after the first line containing `after`, if given)
+// and is drawn as a "# ..." comment beside it. Several notes on one line join.
+function attachNotes(lines, notes) {
+  const out = lines.map(() => []);
+  for (const n of notes || []) {
+    let from = 0;
+    if (n.after) {
+      const a = lines.findIndex((l) => l.text.includes(n.after));
+      if (a >= 0) from = a + 1;
+    }
+    const i = lines.findIndex((l, k) => k >= from && l.text.includes(n.m));
+    if (i >= 0) out[i].push(n.t);
+  }
+  return out;
+}
+
+export function CodeBlock({ title, lines, focus, maxHeight, note, notes }) {
   const box = useRef(null);
   const colorOf = (tags) => {
     for (const t of tags) if (focus[t]) return focus[t];
     return null;
   };
   const anyLit = lines.some((l) => colorOf(l.tags));
-  const key = JSON.stringify(focus);
+  const lineNotes = attachNotes(lines, notes);
+  const key = JSON.stringify(focus) + JSON.stringify(notes || []);
 
   // Keep the first lit line in view as the phase changes.
   useEffect(() => {
@@ -81,9 +99,24 @@ export function CodeBlock({ title, lines, focus, maxHeight, note }) {
               }}
             >
               <span style={{ width: 34, textAlign: "right", paddingRight: 10, color: col || T.rule, userSelect: "none", flexShrink: 0 }}>{i + 1}</span>
-              <span style={{ color: T.ink, paddingRight: 16 }} dangerouslySetInnerHTML={{ __html: pyHtml(l.text) || " " }} />
+              <span style={{ color: T.ink, paddingRight: 16, flexShrink: 0 }} dangerouslySetInnerHTML={{ __html: pyHtml(l.text) || " " }} />
             </div>
           );
+        }).flatMap((row, i) => {
+          // live comment: an extra comment line under its code line, same indent
+          const ln = lineNotes[i];
+          if (!ln.length) return [row];
+          const c = colorOf(lines[i].tags);
+          const col = c ? (c.startsWith("dim:") ? c.slice(4) : c) : null;
+          const indent = lines[i].text.match(/^\s*/)[0];
+          return [row, ...ln.map((t, k) => (
+            <div key={`n${i}-${k}`} style={{ display: "flex", fontFamily: mono, fontSize: 11.5, lineHeight: "17px",
+              borderLeft: `3px solid ${col || "transparent"}`, background: col ? `${col}12` : "transparent", paddingBottom: 2 }}>
+              <span style={{ width: 34, flexShrink: 0, paddingRight: 10, textAlign: "right", color: "#9FE8D9", userSelect: "none" }}>↳</span>
+              <span style={{ whiteSpace: "pre", flexShrink: 0 }}>{indent}</span>
+              <span style={{ color: "#9FE8D9", fontStyle: "italic", whiteSpace: "pre-wrap", paddingRight: 14 }}># {t}</span>
+            </div>
+          ))];
         })}
       </div>
     </div>

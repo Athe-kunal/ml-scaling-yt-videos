@@ -1,14 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { T, mono, sans } from "./theme";
-import { katexHtml } from "./latex";
 import { DEV_COLORS, PHASE, buildPhases, inFlight, mod } from "./ringModel";
-import { COPY, codeFocus, variables } from "./ringLogic";
+import { COPY, codeFocus, codeNotes } from "./ringLogic";
 import { CodeBlock } from "./CodePanel";
 import { panel, h2, chip, navBtn } from "./styles";
-import { Rich, Tex } from "./ui";
+import { Rich } from "./ui";
 import RingDiagram from "./RingDiagram";
-import AttentionMatrix, { SequenceStrip, WorkChart } from "./AttentionMatrix";
-import { equations, transfers } from "./equations";
+import AttentionMatrix, { SequenceStrip } from "./AttentionMatrix";
+
+// Rank switcher shown in the code panel header: the comments follow this rank.
+export function RankPicker({ N, sel, onSel }) {
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+      <span style={{ marginRight: 4 }}>comments for rank</span>
+      {Array.from({ length: N }, (_, r) => (
+        <button
+          key={r} onClick={() => onSel(r)} aria-label={`Show rank ${r}`}
+          style={{ ...navBtn(false), height: 22, padding: "0 8px", fontSize: 11, color: DEV_COLORS[r],
+            borderColor: r === sel ? DEV_COLORS[r] : T.rule, background: r === sel ? `${DEV_COLORS[r]}22` : T.well, fontWeight: r === sel ? 700 : 400 }}
+        >
+          {r}
+        </button>
+      ))}
+    </span>
+  );
+}
 
 export default function RingView({ variant }) {
   const [N, setN] = useState(4);
@@ -45,9 +61,7 @@ export default function RingView({ variant }) {
   }, [playing, idx, last]);
 
   const focus = codeFocus(variant, N, phase, sel);
-  const eqs = equations(variant, N, sel, phase);
-  const xfers = transfers(variant, N, phase);
-  const vars = variables(variant, N, phase, sel);
+  const notes = codeNotes(variant, N, phase, sel);
   const ph = PHASE[phase.type];
 
   return (
@@ -104,63 +118,15 @@ export default function RingView({ variant }) {
           </section>
 
           <section style={panel}>
-            <div style={h2}>Equations · GPU {sel} at this phase</div>
-            <div style={{ display: "grid", gap: 6, color: T.soft, fontSize: 14.5, lineHeight: 1.6 }}>
-              {eqs.map((e, i) => (e.m ? <Tex key={i} tex={e.m} /> : <Rich key={i} html={e.p} />))}
-            </div>
+            <div style={h2}>Causal attention matrix</div>
+            <SequenceStrip variant={variant} N={N} tokens />
+            <div style={{ height: 12 }} />
+            <AttentionMatrix variant={variant} N={N} phase={phase} sel={sel} tokens />
+            <Rich
+              style={{ fontSize: 12.5, color: T.dim, marginTop: 8, lineHeight: 1.5 }}
+              html={copy.matrixNote(N)}
+            />
           </section>
-
-          <section style={panel}>
-            <div style={h2}>Transfers this step{xfers.length ? ` · s = ${phase.s}` : ""}</div>
-            {xfers.length === 0 ? (
-              <div style={{ fontFamily: mono, fontSize: 12.5, color: T.dim }}>
-                {phase.type === "init" ? "No transfers yet." : phase.type === "final" ? `Done: ${N - 1} hops per GPU.` : "Last step: step + 1 == world_size, nothing sent."}
-              </div>
-            ) : (
-              <>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 6 }}>
-                  {xfers.map((x) => {
-                    const hot = x.from === sel || x.to === sel;
-                    return (
-                      <div key={x.from} style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: mono, fontSize: 12, padding: "4px 10px", borderRadius: 6,
-                        background: hot ? `${T.wire}14` : T.well, border: `1px solid ${hot ? `${T.wire}66` : T.rule}` }}>
-                        <span style={{ color: DEV_COLORS[x.from] }}>GPU {x.from}</span>
-                        <span style={{ color: T.wire }}>→</span>
-                        <span dangerouslySetInnerHTML={{ __html: katexHtml(x.tex) }} />
-                        <span style={{ color: T.wire }}>→</span>
-                        <span style={{ color: DEV_COLORS[x.to] }}>GPU {x.to}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <Rich
-                  style={{ fontSize: 13, color: T.dim, marginTop: 10, lineHeight: 1.5 }}
-                  html={String.raw`Rule for every hop: $\;KV^{(s+1)}_{(i+1)\bmod N} = KV^{(s)}_{i} = KV_{(i-s)\bmod N}$. ${phase.type === "wait" ? "Landed: buffers swapped." : "In flight while the kernel runs."}`}
-                />
-              </>
-            )}
-          </section>
-
-          <div className="ra-two">
-            <section style={panel}>
-              <div style={h2}>Causal attention matrix</div>
-              <SequenceStrip variant={variant} N={N} tokens />
-              <div style={{ height: 12 }} />
-              <AttentionMatrix variant={variant} N={N} phase={phase} sel={sel} tokens />
-              <Rich
-                style={{ fontSize: 12.5, color: T.dim, marginTop: 8, lineHeight: 1.5 }}
-                html={copy.matrixNote(N)}
-              />
-            </section>
-            <section style={panel}>
-              <div style={h2}>Compute per step</div>
-              <WorkChart variant={variant} N={N} phase={phase} sel={sel} />
-              <Rich
-                style={{ fontSize: 12.5, color: T.dim, marginTop: 12, lineHeight: 1.55 }}
-                html={copy.workNote(N)}
-              />
-            </section>
-          </div>
         </main>
 
         {/* ---------- code ---------- */}
@@ -169,37 +135,15 @@ export default function RingView({ variant }) {
             title={copy.src[0]}
             lines={copy.src[1]}
             focus={focus.main}
-            maxHeight={copy.src[2]}
-            note={`following GPU ${sel}`}
+            notes={notes.main}
+            maxHeight={copy.src[2] + 40}
+            note={<RankPicker N={N} sel={sel} onSel={setSel} />}
           />
-          <div style={{ ...panel, padding: "10px 14px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-              <div style={{ ...h2, margin: 0 }}>Live variables · rank {sel}</div>
-              <div style={{ display: "flex", gap: 4 }}>
-                {Array.from({ length: N }, (_, r) => (
-                  <button
-                    key={r} onClick={() => setSel(r)} aria-label={`Show rank ${r}`}
-                    style={{ ...navBtn(false), height: 24, padding: "0 9px", fontSize: 11.5, color: DEV_COLORS[r],
-                      borderColor: r === sel ? DEV_COLORS[r] : T.rule, background: r === sel ? `${DEV_COLORS[r]}22` : T.well, fontWeight: r === sel ? 700 : 400 }}
-                  >
-                    {r}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "max-content 1fr", columnGap: 14, rowGap: 3, fontFamily: mono, fontSize: 12 }}>
-              {vars.map(([k, v]) => (
-                <div key={k} style={{ display: "contents" }}>
-                  <span style={{ color: T.dim }}>{k}</span>
-                  <span style={{ color: k === "step <= comm.rank" && String(v).endsWith("false") ? T.bad : T.ink }}>{String(v)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
           <CodeBlock
             title={copy.utils[0]}
             lines={copy.utils[1]}
             focus={focus.utils}
+            notes={notes.utils}
             maxHeight={300}
             note={phase.type === "compute" ? (inFlight(N, phase) ? "kernel runs; _reqs still pending" : "kernel runs (flash-attn)") : null}
           />

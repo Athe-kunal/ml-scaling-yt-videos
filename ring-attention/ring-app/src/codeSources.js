@@ -298,15 +298,19 @@ def stripe_flash_attn_forward(
     return out, lse  #@final
 `);
 
-// Illustrative: how a rank takes its stripe of the full sequence.
+// From the repo's stripe test: how a rank takes its stripe of the sequence.
 const STRIPE_LOCAL = String.raw`
 def extract_local(value, rank, world_size, dim=1):  #@layout
-    # token t -> rank t % world_size; local position p = t // world_size  #@layout
-    return value[:, rank::world_size].contiguous()  #@layout
+    # sequence length split on dim=1
+    value = torch.stack(value.split(world_size, dim=dim), dim=dim).transpose(  #@layout
+        dim, dim + 1  #@layout
+    )  #@layout
+    slicer = [rank if i == dim else slice(None) for i in range(len(value.shape))]  #@layout
+    return value[slicer].contiguous()  #@layout
 
 `;
 
-export const STRIPE_UTILS_SRC = parse("# stripe sharding (illustrative)\n" + STRIPE_LOCAL.replace(/^\n/, "") + "# utils.py" + UTILS);
+export const STRIPE_UTILS_SRC = parse("# test utils: stripe sharding\n" + STRIPE_LOCAL.replace(/^\n/, "") + "# utils.py" + UTILS);
 
 // Tree attention decode (Shyam et al. 2024), written with torch.distributed.
 // The paper's JAX version is lax.pmax + lax.psum; tree_allreduce spells out
