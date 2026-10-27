@@ -4,7 +4,8 @@ import { DEV_COLORS, deviceStep, ownChunks, progress, stepTimes, gridSize, STRIP
 // Causal attention matrix at 2N-chunk resolution (token order on both
 // axes). A cell is coloured by the GPU that computes it: faded once done,
 // bright on the current step. The strip above shows which GPU owns which
-// chunk of the sequence.
+// chunk of the sequence. To the right, one out and one lse cell per query
+// row: it fills as that row's visible keys are merged (update_out_and_lse).
 
 // `tokens`: draw chunked variants on the same S = STRIPE_L*N token grid as
 // stripe (each chunk becomes f tokens), so the two can be compared cell for cell.
@@ -55,8 +56,33 @@ export default function AttentionMatrix({ variant, N, phase, sel, tokens = false
     }
   }
 
+  // per query row: keys merged into out / lse so far (out of q + 1 visible),
+  // and whether the row is being computed or merged on this very step
+  const merged = Array(C).fill(0), busy = Array(C).fill(null);
+  for (const c of cells) {
+    const counts = c.cur && phase.type !== "merge" ? false : true;
+    for (let q = c.q0; q < c.q0 + c.qn; q++) {
+      if (counts) merged[q] += c.tri ? q - c.q0 + 1 : c.kn;
+      if (c.cur) busy[q] = phase.type === "merge" ? "merge" : "compute";
+    }
+  }
+  const colW = Math.max(14, 1.6 * cs), gapC = 10;
+  const ox = size + 14, lx = ox + colW + 6;
+  const outCell = (q, x, round) => {
+    const r = own[q], col = DEV_COLORS[r], frac = merged[q] / (q + 1), b = busy[q];
+    const y = q * cs + 0.75, h = cs - 1.5;
+    return (
+      <g key={`${x}-${q}`}>
+        <rect x={x} y={y} width={colW} height={h} rx={round ? h / 2 : 2} fill={T.well} stroke={col} strokeWidth={0.6} opacity={0.9} />
+        <rect x={x} y={y} width={colW * frac} height={h} rx={round ? h / 2 : 2} fill={col} opacity={frac >= 1 ? 0.85 : 0.55} style={{ transition: "width .4s" }} />
+        {b && <rect x={x - 1} y={y - 1} width={colW + 2} height={h + 2} rx={round ? h / 2 + 1 : 3} fill="none" stroke={b === "merge" ? T.accent2 : T.accent} strokeWidth={1.4} strokeDasharray={b === "compute" ? "2 2" : "none"} />}
+        {r === sel && <rect x={x - 2.5} y={y - 2.5} width={colW + 5} height={h + 5} rx={round ? h / 2 + 2 : 4} fill="none" stroke={T.ink} strokeWidth={0.6} opacity={0.6} />}
+      </g>
+    );
+  };
+
   return (
-    <svg viewBox={`0 0 ${size + pad + 6} ${size + pad + 6}`} style={{ width: "100%", maxWidth: 380, display: "block", margin: "0 auto" }}>
+    <svg viewBox={`0 0 ${size + pad + 14 + 2 * colW + gapC + 18} ${size + pad + 6}`} style={{ width: "100%", maxWidth: 460, display: "block", margin: "0 auto" }}>
       <defs>
         <pattern id={`hatch-${variant}`} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
           <line x1="0" y1="0" x2="0" y2="6" stroke={T.rule} strokeWidth="1" opacity="0.5" />
@@ -87,6 +113,11 @@ export default function AttentionMatrix({ variant, N, phase, sel, tokens = false
             <rect key={i} x={x + 0.5} y={y + 0.5} width={w - 1} height={h - 1} fill={fill} stroke={stroke} strokeWidth={sw} />
           );
         })}
+        {/* out / lse per query row */}
+        <text x={ox + colW / 2} y={-9} textAnchor="middle" fontFamily={mono} fontSize="9" fontWeight="700" fill={T.soft}>out</text>
+        <text x={lx + colW / 2} y={-9} textAnchor="middle" fontFamily={mono} fontSize="9" fontWeight="700" fill={T.soft}>lse</text>
+        {Array.from({ length: C }, (_, q) => outCell(q, ox, false))}
+        {Array.from({ length: C }, (_, q) => outCell(q, lx, true))}
         {/* owner labels */}
         {own.map((r, c) => (
           <g key={c} fontFamily={mono} fontSize={C > 20 ? 6.5 : C > 10 ? 8 : 9.5} fontWeight="700" fill={DEV_COLORS[r]} textAnchor="middle">
@@ -97,6 +128,17 @@ export default function AttentionMatrix({ variant, N, phase, sel, tokens = false
       </g>
       <text x={4} y={12} fontFamily={mono} fontSize="9" fill={T.dim}>Q↓ K→</text>
     </svg>
+  );
+}
+
+// Key for the out / lse columns beside the matrix.
+export function OutLseKey() {
+  return (
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontFamily: mono, fontSize: 11, color: T.dim, marginTop: 8 }}>
+      <span><b style={{ color: T.soft }}>out</b> (vector per row) · <b style={{ color: T.soft }}>lse</b> (number per row, per head): fill = share of the row's visible keys merged so far</span>
+      <span style={{ color: T.accent }}>┅ computing block_out, block_lse</span>
+      <span style={{ color: T.accent2 }}>━ merged this step</span>
+    </div>
   );
 }
 

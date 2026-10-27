@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { T, mono, sans } from "./theme";
-import { DEV_COLORS, PHASE, buildPhases, inFlight, mod } from "./ringModel";
+import { DEV_COLORS, PHASE, buildPhases, mod } from "./ringModel";
 import { COPY, codeFocus, codeNotes } from "./ringLogic";
 import { CodeBlock } from "./CodePanel";
 import { panel, h2, chip, navBtn } from "./styles";
 import { Rich } from "./ui";
-import RingDiagram from "./RingDiagram";
-import AttentionMatrix, { SequenceStrip } from "./AttentionMatrix";
+import RingDiagram, { OutLegend } from "./RingDiagram";
+import AttentionMatrix, { OutLseKey, SequenceStrip } from "./AttentionMatrix";
 
 // Rank switcher shown in the code panel header: the comments follow this rank.
 export function RankPicker({ N, sel, onSel }) {
@@ -115,6 +115,7 @@ export default function RingView({ variant }) {
               </div>
             </div>
             <RingDiagram variant={variant} N={N} phase={phase} sel={sel} onSel={setSel} />
+            <OutLegend variant={variant} N={N} phase={phase} sel={sel} />
           </section>
 
           <section style={panel}>
@@ -122,6 +123,7 @@ export default function RingView({ variant }) {
             <SequenceStrip variant={variant} N={N} tokens />
             <div style={{ height: 12 }} />
             <AttentionMatrix variant={variant} N={N} phase={phase} sel={sel} tokens />
+            <OutLseKey />
             <Rich
               style={{ fontSize: 12.5, color: T.dim, marginTop: 8, lineHeight: 1.5 }}
               html={copy.matrixNote(N)}
@@ -136,16 +138,8 @@ export default function RingView({ variant }) {
             lines={copy.src[1]}
             focus={focus.main}
             notes={notes.main}
-            maxHeight={copy.src[2] + 40}
+            maxHeight="calc(100vh - 90px)"
             note={<RankPicker N={N} sel={sel} onSel={setSel} />}
-          />
-          <CodeBlock
-            title={copy.utils[0]}
-            lines={copy.utils[1]}
-            focus={focus.utils}
-            notes={notes.utils}
-            maxHeight={300}
-            note={phase.type === "compute" ? (inFlight(N, phase) ? "kernel runs; _reqs still pending" : "kernel runs (flash-attn)") : null}
           />
         </aside>
       </div>

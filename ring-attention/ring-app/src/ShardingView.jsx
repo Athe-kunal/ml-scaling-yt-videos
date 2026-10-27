@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { T, mono, sans } from "./theme";
 import { DEV_COLORS } from "./ringModel";
-import { SHARD_SRC, LSE_SRC, PREP_SRC, program, seqLens, cumsum } from "./shardModel";
+import { SHARD_SRC, PREP_SRC, DRIVER_SRC, LSE_SRC, RING_LSE_SRC, program } from "./shardModel";
 import { CodeBlock } from "./CodePanel";
 import { panel, h2, chip, navBtn } from "./styles";
 import { Rich } from "./ui";
@@ -16,8 +16,7 @@ const PREP_ONE = [
   { text: "value = seq0", tags: ["cu"] },
   { text: "cu_seqlens = torch.tensor([0, S], dtype=torch.int32)", tags: ["cu"] },
 ];
-const SEQ_COLORS = ["#5FD3F3", "#C49CFF", "#F2E366"];
-const STEP_COLOR = { lens: T.soft, pack: T.wire, cu: T.accent2, def: T.soft, seq: T.wire, chunk: T.accent, pick: T.accent2, cat: T.accent, split: T.wire, stack: T.accent, transpose: T.accent2, slice: T.accent, q: T.wire, kv: T.accent, ret: T.soft };
+const STEP_COLOR = { t_qkv: T.wire, t_ref: T.soft, t_out: T.accent, t_cut: T.accent2, t_ring: T.wire, t_rcut: T.accent2, t_share: T.accent, t_cmp: T.accent, lens: T.soft, pack: T.wire, cu: T.accent2, def: T.soft, seq: T.wire, chunk: T.accent, pick: T.accent2, cat: T.accent, split: T.wire, stack: T.accent, transpose: T.accent2, slice: T.accent, q: T.wire, kv: T.accent, ret: T.soft };
 
 function Cell({ it, small }) {
   const w = small ? 22 : 27;
@@ -27,10 +26,10 @@ function Cell({ it, small }) {
   const c = it.q ? T.accent : it.neutral ? T.soft : DEV_COLORS[it.own];
   return (
     <span
-      title={it.q ? "query token" : `token ${it.t} → GPU ${it.own}`}
+      title={it.q ? "query token" : it.lse ? `lse of query token ${it.t} (GPU ${it.own})` : `token ${it.t} → GPU ${it.own}`}
       style={{
         width: w, height: w, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-        fontFamily: mono, fontSize: small ? 9.5 : 11, fontWeight: it.hl ? 700 : 500, borderRadius: it.q ? w / 2 : 5,
+        fontFamily: mono, fontSize: small ? 9.5 : 11, fontWeight: it.hl ? 700 : 500, borderRadius: it.q || it.lse ? w / 2 : 5,
         color: it.hl ? T.bg : c, background: it.hl ? c : `${c}26`,
         border: `1.5px solid ${it.isNew ? T.ink : c}`, opacity: it.dim ? 0.22 : 1,
         boxShadow: it.isNew ? `0 0 0 2px ${T.ink}55` : "none", transition: "all .3s",
@@ -83,20 +82,21 @@ function Block({ b, sel, small }) {
 function SegmentRow({ items, small }) {
   const segs = [];
   items.forEach((it) => {
-    if (it.mark != null) segs.push({ mark: it.mark, items: [] });
+    if (it.mark != null) segs.push({ mark: it.mark, name: it.markName || "cu_seqlens", items: [] });
     else if (!it.gap && segs.length) segs[segs.length - 1].items.push(it);
   });
-  const tick = (k, mark, last) => (
+  const tick = (k, mark, last, name) => (
     <span style={{ fontFamily: mono, fontSize: 10, fontWeight: 700, color: T.accent2, whiteSpace: "nowrap" }}>
-      cu_seqlens[{k}] = {mark}{last ? "  (end)" : ""}
+      {name}[{k}] = {mark}{last ? "  (end)" : ""}
     </span>
   );
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, rowGap: 8 }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, rowGap: 8, flex: 1, minWidth: 0 }}>
       {segs.map((sg, k) => (
-        <div key={k} style={{ display: "flex", flexDirection: "column", gap: 3, borderLeft: `2px solid ${T.accent2}`, paddingLeft: 5 }}>
-          {tick(k, sg.mark, sg.items.length === 0)}
-          {sg.items.length > 0 && <div style={{ display: "flex", gap: 3 }}>{sg.items.map((it, j) => <Cell key={j} it={it} small={small} />)}</div>}
+        <div key={k} style={{ display: "flex", flexDirection: "column", gap: 3, borderLeft: `2px solid ${T.accent2}`, paddingLeft: 5, maxWidth: "100%", minWidth: 0, boxSizing: "border-box" }}>
+          {tick(k, sg.mark, sg.items.length === 0, sg.name)}
+          {/* a sequence longer than the panel wraps; its tick stays at the head */}
+          {sg.items.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>{sg.items.map((it, j) => <Cell key={j} it={it} small={small} />)}</div>}
         </div>
       ))}
     </div>
@@ -122,73 +122,6 @@ function ChunkRow({ items, labels, small }) {
   );
 }
 
-// extract_lse: cut a varlen lse back into one piece per sequence. 2-D lse is
-// packed [H, total]; 3-D lse is padded [num_seq, H, max_seqlen].
-function LsePanel({ lens }) {
-  const [dim3, setDim3] = useState(false);
-  const cu = cumsum(lens);
-  const max = Math.max(...lens);
-  const cell = { width: 15, height: 18, borderRadius: 3, flexShrink: 0 };
-  return (
-    <section style={panel}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ ...h2, margin: 0 }}>Getting per-sequence results back · extract_lse</div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {[[false, "lse.dim() == 2"], [true, "lse.dim() == 3"]].map(([v, l]) => (
-            <button key={l} onClick={() => setDim3(v)} style={{ ...navBtn(false), height: 26, fontSize: 11.5, color: dim3 === v ? T.bg : T.soft, background: dim3 === v ? T.accent : T.well, borderColor: dim3 === v ? T.accent : T.rule }}>{l}</button>
-          ))}
-        </div>
-      </div>
-      <div style={{ display: "grid", gap: 14, marginTop: 12 }}>
-        <div>
-          {!dim3 ? (
-            <>
-              <div style={{ fontFamily: mono, fontSize: 11, color: T.dim, marginBottom: 6 }}>lse [H, total = {cu[cu.length - 1]}] (packed; one head shown)</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {lens.map((len, i) => (
-                  <div key={i} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                    <div style={{ display: "flex", gap: 2 }}>
-                      {Array.from({ length: len }, (_, p) => <span key={p} style={{ ...cell, background: `${SEQ_COLORS[i]}55`, border: `1px solid ${SEQ_COLORS[i]}` }} />)}
-                    </div>
-                    <span style={{ fontFamily: mono, fontSize: 10.5, color: SEQ_COLORS[i] }}>lse[:, {cu[i]}:{cu[i + 1]}]</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ fontFamily: mono, fontSize: 11, color: T.dim, marginBottom: 6 }}>lse [num_seq = {lens.length}, H, max_seqlen = {max}] (padded; one head shown)</div>
-              <div style={{ display: "grid", gap: 4 }}>
-                {lens.map((len, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ display: "flex", gap: 2 }}>
-                      {Array.from({ length: max }, (_, p) => (
-                        <span key={p} style={{ ...cell, background: p < len ? `${SEQ_COLORS[i]}55` : `repeating-linear-gradient(45deg, transparent 0 3px, ${T.rule} 3px 4px)`, border: `1px solid ${p < len ? SEQ_COLORS[i] : T.rule}` }} />
-                      ))}
-                    </div>
-                    <span style={{ fontFamily: mono, fontSize: 10.5, color: SEQ_COLORS[i] }}>lse[{i}, :, :{len}]</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-          <Rich
-            style={{ fontSize: 12.5, color: T.dim, marginTop: 10, lineHeight: 1.55 }}
-            html={dim3
-              ? "Padded layout: row $i$ is sequence $i$, valid for its first <code>end - start</code> positions; the rest (hatched) is padding to <code>max_seqlen</code>."
-              : "Packed layout: the same <code>cu_seqlens</code> that cut the tokens cut the lse columns."}
-          />
-          <Rich
-            style={{ fontSize: 12.5, color: T.dim, marginTop: 6, lineHeight: 1.55 }}
-            html="Which layout you get depends on the flash-attn version. The ring code's <code>flatten_varlen_lse</code> / <code>unflatten_varlen_lse</code> in <code>utils.py</code> convert between the two."
-          />
-        </div>
-        <CodeBlock title="extract_lse" lines={LSE_SRC} focus={{ [dim3 ? "d3" : "d2"]: T.accent }} maxHeight={330} />
-      </div>
-    </section>
-  );
-}
-
 export default function ShardingView() {
   const [method, setMethod] = useState("ring");
   const [packed, setPacked] = useState(true);
@@ -196,8 +129,9 @@ export default function ShardingView() {
   const [sel, setSel] = useState(1);
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [dim3, setDim3] = useState(false);
   const varlenOk = method === "ring" || method === "zigzag";
-  const prog = useMemo(() => program(method, N, varlenOk && packed, sel), [method, N, packed, sel, varlenOk]);
+  const prog = useMemo(() => program(method, N, varlenOk && packed, sel, dim3), [method, N, packed, sel, varlenOk, dim3]);
   const last = prog.steps.length - 1;
   const step = prog.steps[Math.min(idx, last)];
   const small = prog.S > 24;
@@ -225,8 +159,14 @@ export default function ShardingView() {
 
   const sc = STEP_COLOR[step.tag] || T.accent;
   const isPrep = step.code === "prep";
+  const isTest = step.code === "test";
+  const inLocal = !isPrep && !isTest; // stepping inside extract_local(qkv)
   const focus = {};
-  if (!isPrep) for (const t of step.focus || [step.tag]) focus[t] = t === "loop" ? `dim:${T.soft}` : sc;
+  if (inLocal) for (const t of step.focus || [step.tag]) focus[t] = t === "loop" ? `dim:${T.soft}` : sc;
+  if (step.tag === "t_out") for (const t of step.focus) focus[t] = `dim:${sc}`;
+  const driverFocus = isTest ? { [step.tag]: sc } : { t_qkv: `dim:${T.wire}` };
+  const lseFocus = step.lse ? { [dim3 ? "d3" : "d2"]: sc } : {};
+  const showLocal = inLocal || step.tag === "t_qkv" || step.tag === "t_out";
   const prepFocus = isPrep ? { [step.tag]: sc } : {};
   // once past the prep steps, the prep code keeps its final values as comments
   const prepFinal = prog.steps.filter((x) => x.code === "prep").at(-1)?.prepNotes ?? [];
@@ -240,7 +180,7 @@ export default function ShardingView() {
         <h1 style={{ margin: "6px 0 8px", fontSize: 28, fontWeight: 600 }}>How the sharding code works, line by line</h1>
         <Rich
           style={{ color: T.soft, lineHeight: 1.55, fontSize: 15, maxWidth: 1000 }}
-          html="Step through each method's <code>extract_local</code>: the lit line is the one running, and the comments beside the code show what each line evaluates to right now. Ring and zig-zag use the varlen version, which needs <code>cu_seqlens</code>: the walkthrough starts by showing where that comes from, for a packed batch or a single sequence."
+          html="Step through each method's <code>extract_local</code>: the lit line is the one running, and the comments beside the code show what each line evaluates to right now. Ring and zig-zag use the varlen version, which needs <code>cu_seqlens</code>: the walkthrough starts by showing where that comes from, for a packed batch or a single sequence. Then it follows the repo's test back out: the same <code>extract_local</code> cuts the reference <code>out</code>, and <code>extract_lse</code> cuts its <code>lse</code>, so they can be compared row by row with what ring attention returns."
         />
       </header>
 
@@ -253,6 +193,13 @@ export default function ShardingView() {
           <button disabled={!varlenOk} onClick={() => reset(setPacked)(false)} style={btn(varlenOk && !packed, T.wire)}>one sequence</button>
           <button disabled={!varlenOk} onClick={() => reset(setPacked)(true)} style={btn(varlenOk && packed, T.wire)}>packed (varlen)</button>
         </div>
+        {varlenOk && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }} title="flash-attn returns varlen lse packed (newer) or padded (older)">
+            <span style={{ fontFamily: mono, fontSize: 11, color: T.dim }}>lse layout</span>
+            <button onClick={() => setDim3(false)} style={btn(!dim3, T.accent2)}>dim 2 · [H, total]</button>
+            <button onClick={() => setDim3(true)} style={btn(dim3, T.accent2)}>dim 3 · [num_seq, H, max]</button>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <span style={{ fontFamily: mono, fontSize: 11, color: T.dim }}>N</span>
           {[2, 4, 8].map((n) => <button key={n} onClick={() => changeN(n)} style={btn(n === N)}>{n}</button>)}
@@ -295,20 +242,30 @@ export default function ShardingView() {
               {varlenOk && <span style={{ color: T.accent2 }}>| = cu_seqlens boundary</span>}
               <span>filled = rank {sel}'s tokens at this step</span>
               <span>white ring = just appended</span>
+              {isTest && <span>round = one query row's lse (one head)</span>}
               {method === "tree" && <span>q = new query token</span>}
             </div>
           </section>
 
-          {varlenOk && packed && <LsePanel lens={seqLens(method, N, true)} />}
         </main>
 
         <aside className="ra-side">
-          {varlenOk && (
+          {varlenOk && (isPrep || inLocal) && (
             <CodeBlock title={packed ? "building a varlen batch (typical, not from the repo)" : "one sequence"} lines={packed ? PREP_SRC : PREP_ONE} focus={prepFocus} notes={isPrep ? step.prepNotes : prepFinal} maxHeight={220} />
           )}
-          <CodeBlock title={m.file} lines={SHARD_SRC[method]} focus={focus} notes={isPrep ? [] : step.notes} maxHeight={420} note={`rank = ${sel}, world_size = ${N}`} />
+          {varlenOk && !isPrep && (
+            <CodeBlock title={`test_${method === "zigzag" ? "zigzag_" : ""}ring_flash_attn_varlen_func.py (abridged)`} lines={DRIVER_SRC[method]} focus={driverFocus} notes={step.driverNotes} maxHeight={inLocal ? 150 : 330} note={`rank = ${sel}, world_size = ${N}`} />
+          )}
+          {(!varlenOk || showLocal) && (
+            <CodeBlock title={m.file} lines={SHARD_SRC[method]} focus={focus} notes={isPrep ? [] : step.notes} maxHeight={420} note={`rank = ${sel}, world_size = ${N}`} />
+          )}
+          {step.lse && <CodeBlock title="extract_lse (test)" lines={LSE_SRC} focus={lseFocus} notes={step.lseNotes} maxHeight={330} />}
+          {step.tag === "t_ring" && (
+            <CodeBlock title="ring_flash_attn_varlen.py · lse layout inside the ring" lines={RING_LSE_SRC} focus={{ [dim3 ? "d3" : "d2"]: T.wire, merge: T.accent2 }} notes={step.ringNotes} maxHeight={300} />
+          )}
         </aside>
       </div>
+
     </div>
   );
 }

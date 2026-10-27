@@ -135,3 +135,21 @@ export function covered(variant, N, r, phase) {
 export function stepTimes(variant, N) {
   return Array.from({ length: N }, (_, s) => Math.max(...Array.from({ length: N }, (_, r) => deviceStep(variant, N, r, s).work)));
 }
+
+// Which KV blocks have been merged into GPU r's out / lse rows by this phase,
+// per q chip (zig-zag: [early half, late half]; ring / stripe: one chip).
+// `fresh` = the block merged during this very merge phase.
+export function mergedRows(variant, N, r, phase) {
+  const { doneBelow } = progress(phase);
+  const upto = phase.type === "merge" ? phase.s + 1 : doneBelow;
+  const rows = variant === "zigzag" ? [[], []] : [[]];
+  for (let t = 0; t < upto; t++) {
+    const d = deviceStep(variant, N, r, t);
+    if (!d.active) continue;
+    // zig-zag "hi" updates only q1's rows (slice_); every other branch updates them all
+    const hit = variant === "zigzag" && d.branch === "hi" ? [1] : rows.map((_, i) => i);
+    hit.forEach((i) => rows[i].push(d.j));
+  }
+  const d = phase.type === "merge" ? deviceStep(variant, N, r, phase.s) : null;
+  return { rows, fresh: d && d.active ? d.j : null };
+}

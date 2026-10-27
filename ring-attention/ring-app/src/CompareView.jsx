@@ -6,8 +6,8 @@ import { RankPicker } from "./RingView";
 import { CodeBlock } from "./CodePanel";
 import { panel, h2, chip, navBtn } from "./styles";
 import { Rich } from "./ui";
-import RingDiagram from "./RingDiagram";
-import AttentionMatrix, { SequenceStrip, WorkChart } from "./AttentionMatrix";
+import RingDiagram, { OutLegend } from "./RingDiagram";
+import AttentionMatrix, { OutLseKey, SequenceStrip, WorkChart } from "./AttentionMatrix";
 
 // Zig-zag and stripe driven by one stepper: same ring, same phases, so each
 // "next" shows what moves and what each kernel computes in both, side by side.
@@ -211,6 +211,7 @@ export default function CompareView() {
             <section key={sd.v} style={panel}>
               <SideHead side={sd} />
               <RingDiagram variant={sd.v} N={N} phase={phase} sel={sel} onSel={setSel} />
+              <OutLegend variant={sd.v} N={N} phase={phase} sel={sel} />
             </section>
           ))}
         </Pair>
@@ -242,6 +243,7 @@ export default function CompareView() {
               <SequenceStrip variant={sd.v} N={N} tokens />
               <div style={{ height: 12 }} />
               <AttentionMatrix variant={sd.v} N={N} phase={phase} sel={sel} tokens />
+              <OutLseKey />
               <div style={{ height: 14 }} />
               <WorkChart variant={sd.v} N={N} phase={phase} sel={sel} />
             </section>
