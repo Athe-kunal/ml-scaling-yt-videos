@@ -36,12 +36,12 @@ def ring_flash_attn_forward(
                     "q": q,  #@comp
                     "k": k,  #@comp
                     "v": v,  #@comp
-                    "dropout_p": dropout_p,
+                    "dropout_p": dropout_p,  #@comp
                     "softmax_scale": softmax_scale,  #@comp
                     "causal": causal and step == 0,  #@comp causal
-                    "window_size": window_size,
-                    "alibi_slopes": alibi_slopes,
-                    "return_softmax": True and dropout_p > 0,
+                    "window_size": window_size,  #@comp
+                    "alibi_slopes": alibi_slopes,  #@comp
+                    "return_softmax": True and dropout_p > 0,  #@comp
                 }  #@comp
             )  #@comp
             # (output unpacking differs across flash-attn versions)
@@ -75,19 +75,19 @@ def zigzag_ring_flash_attn_forward(
 
     def forward(q, k, v, causal):  #@fwd
         params = get_default_args(_flash_attn_forward).copy()  #@fwd
-        params.update(
-            {
+        params.update(  #@fwd
+            {  #@fwd
                 "q": q,  #@fwd
                 "k": k,  #@fwd
                 "v": v,  #@fwd
-                "dropout_p": dropout_p,
-                "softmax_scale": softmax_scale,
+                "dropout_p": dropout_p,  #@fwd
+                "softmax_scale": softmax_scale,  #@fwd
                 "causal": causal,  #@fwd
-                "window_size": window_size,
-                "alibi_slopes": alibi_slopes,
-                "return_softmax": True and dropout_p > 0,
-            }
-        )
+                "window_size": window_size,  #@fwd
+                "alibi_slopes": alibi_slopes,  #@fwd
+                "return_softmax": True and dropout_p > 0,  #@fwd
+            }  #@fwd
+        )  #@fwd
         block_out, block_lse = _flash_attn_forward(**params)  #@fwd
         return block_out, block_lse  #@fwd
 
@@ -254,18 +254,18 @@ def stripe_flash_attn_forward(
         if step + 1 != comm.world_size:  #@send
             next_k, next_v = comm.send_recv_kv(k, v)  #@send
 
-        params = get_default_args(_flash_attn_forward).copy()
+        params = get_default_args(_flash_attn_forward).copy()  #@comp:lo comp:hi
         if step <= comm.rank:  #@cond:lo
             params.update(  #@comp:lo
                 {  #@comp:lo
                     "q": q,  #@comp:lo
                     "k": k,  #@comp:lo
                     "v": v,  #@comp:lo
-                    "dropout_p": dropout_p,
-                    "softmax_scale": softmax_scale,
+                    "dropout_p": dropout_p,  #@comp:lo
+                    "softmax_scale": softmax_scale,  #@comp:lo
                     "causal": causal,  #@comp:lo
-                    "alibi_slopes": alibi_slopes,
-                    "return_softmax": True and dropout_p > 0,
+                    "alibi_slopes": alibi_slopes,  #@comp:lo
+                    "return_softmax": True and dropout_p > 0,  #@comp:lo
                 }  #@comp:lo
             )  #@comp:lo
             # (window_size / output unpacking differ across flash-attn versions)
@@ -277,11 +277,11 @@ def stripe_flash_attn_forward(
                     "q": q[:, 1:],  #@comp:hi
                     "k": k[:, :-1],  #@comp:hi
                     "v": v[:, :-1],  #@comp:hi
-                    "dropout_p": dropout_p,
-                    "softmax_scale": softmax_scale,
+                    "dropout_p": dropout_p,  #@comp:hi
+                    "softmax_scale": softmax_scale,  #@comp:hi
                     "causal": causal,  #@comp:hi
-                    "alibi_slopes": alibi_slopes,
-                    "return_softmax": True and dropout_p > 0,
+                    "alibi_slopes": alibi_slopes,  #@comp:hi
+                    "return_softmax": True and dropout_p > 0,  #@comp:hi
                 }  #@comp:hi
             )  #@comp:hi
             block_out, block_lse = _flash_attn_forward(**params)  #@comp:hi

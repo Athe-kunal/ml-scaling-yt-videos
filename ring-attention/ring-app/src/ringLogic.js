@@ -9,26 +9,26 @@ export const COPY = {
   ring: {
     eyebrow: "SEQUENCE PARALLELISM · RING ATTENTION",
     title: "Ring attention: Q stays, KV goes around",
-    intro: "Each GPU keeps its query block and passes its key/value block to the next GPU, $N$ times. Every hop is posted <i>before</i> the attention kernel, so the transfer hides behind compute. With a causal mask, half the blocks it receives are all future tokens, and that is where the imbalance comes from.",
+    intro: "Each GPU keeps its query block and passes its key/value block to the next GPU, $N$ times. The send is posted <i>before</i> the kernel, so it hides behind compute. The causal mask makes the load uneven.",
     src: ["ring_flash_attn.py", RING_SRC, 430],
     utils: ["utils.py", UTILS_SRC],
-    matrixNote: (N) => `Token resolution, $S = ${STRIPE_L * N}$ tokens. GPU $r$ owns tokens $4r..4r+3$ (thick lines = 2-token chunks). GPU 0's rows have almost nothing to the left of the diagonal; GPU ${N - 1}'s rows see the whole sequence. White outline = the GPU you follow.`,
+    matrixNote: (N) => `Token resolution, $S = ${STRIPE_L * N}$ tokens. GPU 0's rows see almost nothing; GPU ${N - 1}'s see everything. White outline = the GPU you follow.`,
   },
   zigzag: {
     eyebrow: "SEQUENCE PARALLELISM · ZIG-ZAG RING ATTENTION",
     title: "Zig-zag ring attention: balance the causal triangle",
-    intro: "Same ring and same hops, but the sequence is cut into $2N$ chunks and GPU $r$ takes chunks $r$ and $2N-1-r$: one early, one late. Every off-diagonal step now costs exactly half a block on every GPU, picked by one of two slices: <code>k[:, :L/2]</code> or <code>q[:, L/2:]</code>.",
+    intro: "Same ring and hops, but the sequence is cut into $2N$ chunks and GPU $r$ takes chunks $r$ and $2N-1-r$: one early, one late. Every GPU now does the same work at each step.",
     src: ["zigzag_ring_flash_attn.py", ZIGZAG_SRC, 470],
     utils: ["extract_local + utils.py", ZIGZAG_UTILS_SRC],
-    matrixNote: (N) => `Token resolution, $S = ${STRIPE_L * N}$ tokens. GPU $r$ owns tokens $2r, 2r{+}1$ near the top (few keys) and $${STRIPE_L * N - 2}{-}2r, ${STRIPE_L * N - 1}{-}2r$ near the bottom (many keys), so every GPU's share of the triangle is the same.`,
+    matrixNote: (N) => `Token resolution, $S = ${STRIPE_L * N}$ tokens. Each GPU has one chunk near the top (few keys) and one near the bottom (many keys).`,
   },
   stripe: {
     eyebrow: "SEQUENCE PARALLELISM · STRIPE ATTENTION",
     title: "Stripe attention: deal tokens round-robin",
-    intro: "Same ring and same hops, but tokens are dealt like cards: token $t$ goes to GPU $t \\bmod N$. Every GPU then holds a thin stripe spread over the whole sequence, so each KV block it receives is about half visible, at every step. If the block came from an earlier rank the plain causal mask is right; from a later rank the mask shifts by one token: <code>q[:, 1:]</code> against <code>k[:, :-1]</code>.",
+    intro: "Same ring and hops, but tokens are dealt round-robin: token $t$ goes to GPU $t \\bmod N$. Each GPU holds a stripe spread over the whole sequence, so every KV block is about half visible. A block from a later rank needs the causal mask shifted by one token.",
     src: ["stripe_flash_attn.py", STRIPE_SRC, 470],
     utils: ["extract_local + utils.py", STRIPE_UTILS_SRC],
-    matrixNote: (N) => `Token resolution: $S = ${STRIPE_L}N = ${STRIPE_L * N}$ tokens, row $t$ belongs to GPU $t \\bmod ${N}$. Every GPU's rows are spread evenly down the triangle. A step fills $\\tfrac{L(L+1)}{2}$ cells (from an earlier rank) or $\\tfrac{L(L-1)}{2}$ (later rank): with $L=${STRIPE_L}$ that is ${(STRIPE_L * (STRIPE_L + 1)) / 2}$ vs ${(STRIPE_L * (STRIPE_L - 1)) / 2}$, but both tend to $L^2/2$ as $L$ grows.`,
+    matrixNote: (N) => `Token resolution: $S = ${STRIPE_L * N}$ tokens, row $t$ belongs to GPU $t \\bmod ${N}$. Every GPU's rows are spread evenly down the triangle.`,
   },
 };
 
@@ -151,13 +151,15 @@ function phaseNotes(variant, N, phase, r) {
   const last = s === N - 1;
   main.push(n("for step in range(comm.world_size)", `step = ${s}  (k, v held: ${T(kT)} from GPU ${j})`));
   main.push(n("if step + 1 != comm.world_size", `${s} + 1 != ${N} → ${!last}${last ? ": last step, nothing to send" : ""}`));
+  main.push(n("if step + 1 != comm.world_size", `${s} + 1 != ${N} → ${!last}${last ? ": nothing to wait for" : ""}`, "comm.send_recv_kv"));
   if (!last) {
     main.push(n("next_k, next_v = comm.send_recv_kv(k, v)", `send ${T(kT)} → GPU ${nxt}; receive ${T(tk(jn))} ← GPU ${prv}`));
     utils.push(n("send_op = dist.P2POp(", `isend ${T(kT)} → GPU ${nxt}`));
     utils.push(n("recv_op = dist.P2POp", `irecv ${T(tk(jn))} ← GPU ${prv}`));
   }
   const js = covered(variant, N, r, { type: "merge", s });
-  const mergeText = s === 0 ? "first block: out, lse = block_out, block_lse" : `out now covers KV from GPUs ${js.join(", ")}`;
+  const done = type === "merge" || type === "wait";
+  const mergeText = s === 0 ? "first block: out, lse = block_out, block_lse" : `${done ? "out now covers" : "after this merge, out covers"} KV from GPUs ${js.join(", ")}`;
 
   if (variant === "ring") {
     main.push(n("if not causal or step <= comm.rank", `${s} <= ${r} → ${d.active}${d.active ? "" : `: keys ${T(kT)} are all after queries ${T(qT)}, skip`}`));
@@ -179,6 +181,7 @@ function phaseNotes(variant, N, phase, r) {
         main.push(n("out, lse = update_out_and_lse", mergeText, "elif step <= comm.rank"));
       } else {
         main.push(n("forward(q1, k, v, causal=False)", `q1 ${T(qT.slice(L / 2))} × k ${T(kT)}, no mask`));
+        main.push(n("out, lse = update_out_and_lse(", `${mergeText} (q1 rows only)`, "else:"));
         main.push(n("slice_=(slice(None), slice(block_seq_len, None))", `only rows of q1 ${T(qT.slice(L / 2))} change`));
         utils.push(n("slice_out, slice_lse = out[slice_]", `rows ${L / 2}: (q1)`));
       }

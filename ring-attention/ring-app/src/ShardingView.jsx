@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { T, mono, sans } from "./theme";
 import { DEV_COLORS } from "./ringModel";
-import { SHARD_SRC, PREP_SRC, DRIVER_SRC, LSE_SRC, RING_LSE_SRC, program } from "./shardModel";
+import { SHARD_SRC, PREP_SRC, DRIVER_SRC, program } from "./shardModel";
 import { CodeBlock } from "./CodePanel";
 import { panel, h2, chip, navBtn } from "./styles";
 import { Rich } from "./ui";
@@ -15,8 +15,9 @@ const METHODS = [
 const PREP_ONE = [
   { text: "value = seq0", tags: ["cu"] },
   { text: "cu_seqlens = torch.tensor([0, S], dtype=torch.int32)", tags: ["cu"] },
+  { text: "max_seqlen = S", tags: ["cu"] },
 ];
-const STEP_COLOR = { t_qkv: T.wire, t_ref: T.soft, t_out: T.accent, t_cut: T.accent2, t_ring: T.wire, t_rcut: T.accent2, t_share: T.accent, t_cmp: T.accent, lens: T.soft, pack: T.wire, cu: T.accent2, def: T.soft, seq: T.wire, chunk: T.accent, pick: T.accent2, cat: T.accent, split: T.wire, stack: T.accent, transpose: T.accent2, slice: T.accent, q: T.wire, kv: T.accent, ret: T.soft };
+const STEP_COLOR = { t_qkv: T.wire, t_lse: T.accent2, lens: T.soft, pack: T.wire, cu: T.accent2, def: T.soft, seq: T.wire, chunk: T.accent, pick: T.accent2, cat: T.accent, split: T.wire, stack: T.accent, transpose: T.accent2, slice: T.accent, q: T.wire, kv: T.accent, ret: T.soft };
 
 function Cell({ it, small }) {
   const w = small ? 22 : 27;
@@ -129,9 +130,8 @@ export default function ShardingView() {
   const [sel, setSel] = useState(1);
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [dim3, setDim3] = useState(false);
   const varlenOk = method === "ring" || method === "zigzag";
-  const prog = useMemo(() => program(method, N, varlenOk && packed, sel, dim3), [method, N, packed, sel, varlenOk, dim3]);
+  const prog = useMemo(() => program(method, N, varlenOk && packed, sel), [method, N, packed, sel, varlenOk]);
   const last = prog.steps.length - 1;
   const step = prog.steps[Math.min(idx, last)];
   const small = prog.S > 24;
@@ -163,10 +163,8 @@ export default function ShardingView() {
   const inLocal = !isPrep && !isTest; // stepping inside extract_local(qkv)
   const focus = {};
   if (inLocal) for (const t of step.focus || [step.tag]) focus[t] = t === "loop" ? `dim:${T.soft}` : sc;
-  if (step.tag === "t_out") for (const t of step.focus) focus[t] = `dim:${sc}`;
   const driverFocus = isTest ? { [step.tag]: sc } : { t_qkv: `dim:${T.wire}` };
-  const lseFocus = step.lse ? { [dim3 ? "d3" : "d2"]: sc } : {};
-  const showLocal = inLocal || step.tag === "t_qkv" || step.tag === "t_out";
+  const showLocal = inLocal || step.tag === "t_qkv";
   const prepFocus = isPrep ? { [step.tag]: sc } : {};
   // once past the prep steps, the prep code keeps its final values as comments
   const prepFinal = prog.steps.filter((x) => x.code === "prep").at(-1)?.prepNotes ?? [];
@@ -180,7 +178,7 @@ export default function ShardingView() {
         <h1 style={{ margin: "6px 0 8px", fontSize: 28, fontWeight: 600 }}>How the sharding code works, line by line</h1>
         <Rich
           style={{ color: T.soft, lineHeight: 1.55, fontSize: 15, maxWidth: 1000 }}
-          html="Step through each method's <code>extract_local</code>: the lit line is the one running, and the comments beside the code show what each line evaluates to right now. Ring and zig-zag use the varlen version, which needs <code>cu_seqlens</code>: the walkthrough starts by showing where that comes from, for a packed batch or a single sequence. Then it follows the repo's test back out: the same <code>extract_local</code> cuts the reference <code>out</code>, and <code>extract_lse</code> cuts its <code>lse</code>, so they can be compared row by row with what ring attention returns."
+          html="Step through each method's <code>extract_local</code>, with the running line lit. Ring and zig-zag use the varlen version, which needs <code>cu_seqlens</code>."
         />
       </header>
 
@@ -193,13 +191,6 @@ export default function ShardingView() {
           <button disabled={!varlenOk} onClick={() => reset(setPacked)(false)} style={btn(varlenOk && !packed, T.wire)}>one sequence</button>
           <button disabled={!varlenOk} onClick={() => reset(setPacked)(true)} style={btn(varlenOk && packed, T.wire)}>packed (varlen)</button>
         </div>
-        {varlenOk && (
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }} title="flash-attn returns varlen lse packed (newer) or padded (older)">
-            <span style={{ fontFamily: mono, fontSize: 11, color: T.dim }}>lse layout</span>
-            <button onClick={() => setDim3(false)} style={btn(!dim3, T.accent2)}>dim 2 · [H, total]</button>
-            <button onClick={() => setDim3(true)} style={btn(dim3, T.accent2)}>dim 3 · [num_seq, H, max]</button>
-          </div>
-        )}
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <span style={{ fontFamily: mono, fontSize: 11, color: T.dim }}>N</span>
           {[2, 4, 8].map((n) => <button key={n} onClick={() => changeN(n)} style={btn(n === N)}>{n}</button>)}
@@ -251,17 +242,13 @@ export default function ShardingView() {
 
         <aside className="ra-side">
           {varlenOk && (isPrep || inLocal) && (
-            <CodeBlock title={packed ? "building a varlen batch (typical, not from the repo)" : "one sequence"} lines={packed ? PREP_SRC : PREP_ONE} focus={prepFocus} notes={isPrep ? step.prepNotes : prepFinal} maxHeight={220} />
+            <CodeBlock title={packed ? "building a varlen batch" : "one sequence"} lines={packed ? PREP_SRC : PREP_ONE} focus={prepFocus} notes={isPrep ? step.prepNotes : prepFinal} maxHeight={220} />
           )}
           {varlenOk && !isPrep && (
             <CodeBlock title={`test_${method === "zigzag" ? "zigzag_" : ""}ring_flash_attn_varlen_func.py (abridged)`} lines={DRIVER_SRC[method]} focus={driverFocus} notes={step.driverNotes} maxHeight={inLocal ? 150 : 330} note={`rank = ${sel}, world_size = ${N}`} />
           )}
           {(!varlenOk || showLocal) && (
             <CodeBlock title={m.file} lines={SHARD_SRC[method]} focus={focus} notes={isPrep ? [] : step.notes} maxHeight={420} note={`rank = ${sel}, world_size = ${N}`} />
-          )}
-          {step.lse && <CodeBlock title="extract_lse (test)" lines={LSE_SRC} focus={lseFocus} notes={step.lseNotes} maxHeight={330} />}
-          {step.tag === "t_ring" && (
-            <CodeBlock title="ring_flash_attn_varlen.py · lse layout inside the ring" lines={RING_LSE_SRC} focus={{ [dim3 ? "d3" : "d2"]: T.wire, merge: T.accent2 }} notes={step.ringNotes} maxHeight={300} />
           )}
         </aside>
       </div>

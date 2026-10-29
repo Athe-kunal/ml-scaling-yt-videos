@@ -113,10 +113,10 @@ function DiffTable({ N, phase, sel }) {
 }
 
 const TAKEAWAY = {
-  init: "Zig-zag gives each GPU two contiguous chunks (one early, one late). Stripe deals single tokens round-robin. Q, K, V never leave this layout; only K, V rotate.",
-  send: "The transfer is identical: each GPU sends the KV it holds to rank+1 and receives from rank−1. Only what is inside the shard differs.",
-  compute: "Here they differ. Zig-zag slices the inputs in half and runs an <b>unmasked</b> rectangle. Stripe keeps full-size inputs, shifts them by one token when the KV came from a later rank, and always runs a <b>causal</b> kernel.",
-  merge: "Both merge with the same <code>update_out_and_lse</code>. On the <code>else</code> branch zig-zag merges only the late half of the rows (<code>slice_=(:, L/2:)</code>); stripe merges every row except row 0 (<code>slice_=(:, 1:)</code>).",
+  init: "Zig-zag gives each GPU two chunks, one early and one late. Stripe deals single tokens round-robin. Only K and V rotate.",
+  send: "The transfer is identical: each GPU sends its KV to rank+1 and receives from rank−1.",
+  compute: "Here they differ. Zig-zag runs an <b>unmasked</b> half-size rectangle. Stripe keeps full-size inputs and always runs a <b>causal</b> kernel, shifted by one token for later ranks.",
+  merge: "Both merge with <code>update_out_and_lse</code>. Zig-zag merges only the late half of the rows; stripe merges all rows except row 0.",
   wait: "Same sync point in both: <code>comm.wait()</code>, then <code>k, v = next_k, next_v</code>.",
   final: "Both return output in their own permuted order: undo the zig-zag chunk swap, or interleave the stripes.",
 };
@@ -162,7 +162,7 @@ export default function CompareView() {
         <h1 style={{ margin: "6px 0 8px", fontSize: 28, fontWeight: 600 }}>Same ring, different deal</h1>
         <Rich
           style={{ color: T.soft, lineHeight: 1.55, fontSize: 15, maxWidth: 1000 }}
-          html="One stepper drives both. The ring, the hops and the sync points are identical; what differs is which tokens sit in each shard and therefore what each GPU feeds the kernel at every step. Both views use $S = 4N$ tokens so the token numbers line up."
+          html="One stepper drives both. The ring and the hops are identical; only which tokens sit in each shard differs. Both use $S = 4N$ tokens."
         />
       </header>
 

@@ -196,6 +196,7 @@ export default function DistributeView() {
 
   useEffect(() => {
     const onKey = (e) => {
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") setPlaying(false);
       if (e.key === "ArrowRight") setStage((s) => STAGES[Math.min(STAGES.findIndex((x) => x.id === s) + 1, STAGES.length - 1)].id);
       if (e.key === "ArrowLeft") setStage((s) => STAGES[Math.max(STAGES.findIndex((x) => x.id === s) - 1, 0)].id);
     };
@@ -213,7 +214,7 @@ export default function DistributeView() {
         <h1 style={{ margin: "6px 0 8px", fontSize: 28, fontWeight: 600 }}>Where every query, key and value goes</h1>
         <Rich
           style={{ color: T.soft, lineHeight: 1.55, fontSize: 15, maxWidth: 1000 }}
-          html={`Start with one sequence of ${4 * N} tokens, each with its own $q$, $k$, $v$. Colour every token by the GPU it is headed to, then send them to ${N} GPUs on a ring. Switch the layout to watch the same tokens re-shuffle. Below, the causal attention matrix of all three layouts shows how the compute ends up split.`}
+          html={`One sequence of ${4 * N} tokens, split across ${N} GPUs on a ring. Colour each token by the GPU it goes to, then switch the layout to watch the tokens re-shuffle.`}
         />
       </header>
 
@@ -230,9 +231,9 @@ export default function DistributeView() {
           {[4, 8].map((n) => <button key={n} onClick={() => { setN(n); setSel(null); }} style={btn(N === n)}>{n}</button>)}
         </div>
         <div style={{ display: "flex", gap: 8, flex: "1 1 260px", justifyContent: "flex-end" }}>
-          <button onClick={() => setStage(STAGES[Math.max(si - 1, 0)].id)} disabled={si === 0} style={navBtn(si === 0)}>← prev</button>
+          <button onClick={() => { setPlaying(false); setStage(STAGES[Math.max(si - 1, 0)].id); }} disabled={si === 0} style={navBtn(si === 0)}>← prev</button>
           <button onClick={() => { if (!playing || atEnd) { setStage("seq"); setMethod("ring"); setPlaying(true); } else setPlaying(false); }} style={{ ...navBtn(false), color: T.accent, borderColor: `${T.accent}88` }}>{playing && !atEnd ? "❚❚ pause" : "▶ play all three"}</button>
-          <button onClick={() => setStage(STAGES[Math.min(si + 1, 2)].id)} disabled={si === 2} style={navBtn(si === 2)}>next →</button>
+          <button onClick={() => { setPlaying(false); setStage(STAGES[Math.min(si + 1, 2)].id); }} disabled={si === 2} style={navBtn(si === 2)}>next →</button>
         </div>
       </div>
 
@@ -251,10 +252,10 @@ export default function DistributeView() {
         <Rich
           style={{ fontSize: 13, color: T.dim, lineHeight: 1.55 }}
           html={stage === "dist"
-            ? "Each GPU keeps its <b>Q</b> for the whole forward pass; its <b>K, V</b> are what travel around the ring (arrows), one hop per step, so every query eventually meets every key it is allowed to see."
+            ? "Each GPU keeps its <b>Q</b>. Its <b>K, V</b> travel around the ring (arrows), so every query meets every key it can see."
             : stage === "assign"
-              ? "Nothing has moved yet: the colour is just the destination. Compare the patterns: one block per GPU (ring), an early and a late pair (zig-zag), or every N-th token (stripe)."
-              : "In a single-GPU model all of this sits on one device. With sequence parallelism we cut it along the token axis."}
+              ? "Nothing has moved yet: the colour is just the destination. Compare the patterns: a block (ring), an early and late pair (zig-zag), or every N-th token (stripe)."
+              : "On one GPU all of this sits on one device. Sequence parallelism cuts it along the token axis."}
         />
       </section>
 
@@ -264,7 +265,7 @@ export default function DistributeView() {
       </div>
       <Rich
         style={{ fontSize: 13, color: T.dim, lineHeight: 1.6, marginTop: 12, maxWidth: 1100 }}
-        html={`Row $q$ is the query of token $q$; it can see keys $0..q$ (the triangle). The GPU that holds $q$ does all of row $q$'s work, whichever step the keys arrive at. Ring gives GPU ${N - 1} the longest rows and GPU 0 the shortest. Zig-zag pairs a short row block with a long one. Stripe gives every GPU rows spread evenly down the triangle. Click a GPU on the ring to see its rows in all three.`}
+        html={`Row $q$ is the query of token $q$, and it sees keys $0..q$. The GPU that holds $q$ does all of row $q$'s work. Ring gives GPU ${N - 1} the longest rows; zig-zag and stripe balance them. Click a GPU on the ring to see its rows in all three.`}
       />
     </div>
   );
