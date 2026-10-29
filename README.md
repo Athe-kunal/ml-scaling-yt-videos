@@ -69,7 +69,7 @@ make ring-install && make ring        # http://localhost:5180
 Scheduler / paged-KV visualizer (Vite), plus `tinyserve.py` (a small inference server, not the visualizer).
 
 ```bash
-cd inference_engineering/scheduler-app && npm install && npm run dev
+make inference-install && make inference   # http://localhost:5181
 ```
 
 ## slides / Scaling_Lectures

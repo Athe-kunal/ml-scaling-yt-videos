@@ -36,3 +36,13 @@ ring-install:
 
 ring:
 	cd $(RING_DIR) && npm run dev -- --port $(RING_PORT)
+
+.PHONY: inference inference-install
+INFERENCE_DIR := inference_engineering/scheduler-app
+INFERENCE_PORT ?= 5181
+
+inference-install:
+	cd $(INFERENCE_DIR) && npm install
+
+inference:
+	cd $(INFERENCE_DIR) && npm run dev -- --port $(INFERENCE_PORT)
