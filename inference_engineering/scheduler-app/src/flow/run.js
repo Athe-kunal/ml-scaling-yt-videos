@@ -2,6 +2,10 @@ import "./program.js";
 import { samplingParams } from "./program.js";
 import { Interp } from "./interp.js";
 import { makeWorld } from "./world.js";
+import { finalize } from "./dsl.js";
+import { BLOCKS } from "./blocks.js";
+
+finalize(BLOCKS);
 
 // Build the world, wire up client arrivals for serve mode, and trace main().
 export function runTrace(cfg) {

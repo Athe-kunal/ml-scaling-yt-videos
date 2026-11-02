@@ -41,7 +41,14 @@ function Num({ label, value, min, max, onChange }) {
 
 function Run({ cfg, setCfg, trace }) {
   const { events, hashInfo, halted } = trace;
-  const dbg = useDebugger(events);
+  const [mode, setMode] = useState("blocks");
+  const [expanded, setExpanded] = useState(() => new Set());
+  const toggleExpand = (id) => setExpanded((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  // where stepping stops: every event in lines mode; in blocks mode the end of
+  // each block run, plus every line of an opened block
+  const stops = useMemo(() => events.map((e, j) => mode === "lines" || j === events.length - 1
+    || events[j + 1].thread !== e.thread || events[j + 1].bkey !== e.bkey || expanded.has(e.grp)), [events, mode, expanded]);
+  const dbg = useDebugger(events, stops);
   const ev = dbg.ev;
   const prev = events[dbg.i - 1];
   const [peek, setPeek] = useState(() => new Set());
@@ -97,12 +104,20 @@ function Run({ cfg, setCfg, trace }) {
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: m.color, opacity: k === mod ? 1 : 0.5 }} />{m.label}
               </span>
             ))}
-            <button onClick={() => setShowAll(!showAll)} style={{ ...navBtn(false), height: 22, fontSize: 10, marginLeft: "auto" }}>
+            <span style={{ marginLeft: "auto", display: "inline-flex", gap: 3 }}>
+              {["blocks", "lines"].map((m) => (
+                <button key={m} onClick={() => setMode(m)} title={m === "blocks" ? "one box per block of code, step block by block" : "every line, step line by line"}
+                  style={{ ...navBtn(false), height: 22, fontSize: 10, background: m === mode ? T.accent : T.well, color: m === mode ? T.bg : T.soft, borderColor: m === mode ? T.accent : T.rule }}>{m}</button>
+              ))}
+            </span>
+            {mode === "blocks" && expanded.size > 0 && <button onClick={() => setExpanded(new Set())} style={{ ...navBtn(false), height: 22, fontSize: 10 }}>close code</button>}
+            <button onClick={() => setShowAll(!showAll)} style={{ ...navBtn(false), height: 22, fontSize: 10 }}>
               callers: {showAll ? "full" : "trimmed"}
             </button>
             {peek.size > 0 && <button onClick={() => setPeek(new Set())} style={{ ...navBtn(false), height: 22, fontSize: 10 }}>close peeks</button>}
           </div>
-          <FlowCanvas ev={ev} prev={prev} peek={peek} togglePeek={togglePeek} showAll={showAll} />
+          <FlowCanvas ev={ev} prev={prev} peek={peek} togglePeek={togglePeek} showAll={showAll}
+            mode={mode} expanded={expanded} toggleExpand={toggleExpand} cfg={cfg} hashInfo={hashInfo} />
         </div>
 
         <div className="pane-right">

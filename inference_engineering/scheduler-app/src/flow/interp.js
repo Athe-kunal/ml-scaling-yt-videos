@@ -55,7 +55,7 @@ function ser(v, depth = 0) {
 const serFrame = (f) => {
   const vars = {};
   for (const [k, v] of Object.entries(f.L)) if (v !== undefined && !k.startsWith("_")) vars[k] = ser(v);
-  return { fn: f.fn, label: f.label, node: f.node, vars, iters: { ...f.iters }, totals: { ...f.totals }, dec: { ...f.dec }, notes: { ...f.notes } };
+  return { fn: f.fn, label: f.label, node: f.node, grp: f.grp ? f.grp.id : null, vars, iters: { ...f.iters }, totals: { ...f.totals }, dec: { ...f.dec }, notes: { ...f.notes } };
 };
 
 // ---------------------------------------------------------------- threads
@@ -109,7 +109,7 @@ export class Interp {
   *call(th, fn, args, label) {
     const spec = FNS[fn];
     if (!spec) throw new Error(`no flowchart for ${fn}`);
-    const f = { fn, label, L: {}, node: null, iters: {}, totals: {}, dec: {}, notes: {} };
+    const f = { fn, label, L: {}, node: null, grp: null, iters: {}, totals: {}, dec: {}, notes: {} };
     spec.params.forEach((p, i) => (f.L[p] = args ? args[i] : undefined));
     th.stack.push(f);
     let ret;
@@ -156,6 +156,16 @@ export class Interp {
   *exec(th, n, f) {
     const G = this.G, L = f.L;
     switch (n.t) {
+      case "GRP": {
+        const outer = f.grp;
+        f.grp = n;
+        try {
+          yield* this.block(th, n.body, f);
+        } finally {
+          f.grp = outer;
+        }
+        return;
+      }
       case "S": {
         const note = n.run ? n.run(L, G) : undefined;
         yield* this.mark(th, f, n, note);
@@ -268,7 +278,12 @@ export class Interp {
       this.lastWorld = w;
     }
     const top = th.stack[th.stack.length - 1];
+    // which block each frame is in (and which loop iteration inside it): a run of
+    // events with the same key is one block-level step
+    const bkey = th.stack.map((f) => (f.grp ? `${f.fn}:${f.grp.id}:${f.grp.desc.map((id) => f.iters[id] ?? "").join(",")}` : `${f.fn}:${f.node}`)).join("/");
     this.events.push({
+      bkey,
+      grp: top.grp ? top.grp.id : null,
       thread: th.name,
       depth: th.stack.length,
       fn: top.fn,

@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
 import { T, mono } from "../theme";
-import { FNS, calleeOf } from "../flow/dsl";
+import { FNS, NODE, calleeOf } from "../flow/dsl";
 import { MODS } from "../flow/world";
 import { pyHtml } from "../pyhl";
 import { tokText } from "./Panels";
+import { BlockViz } from "./BlockViz";
 
 // The whole program as one nested flowchart, starting at each thread's root
 // function. The node a frame is on, if it calls something, opens into the
@@ -12,6 +13,15 @@ import { tokText } from "./Panels";
 //
 // levels: "focus" = the running frame, "near" = its caller, "far" = older
 // callers (trimmed to the path unless showAll), "peek" = a callee opened by click.
+//
+// mode "blocks": each function is a few blocks (flow/blocks.js). A block is one
+// box with its title, the functions it calls and, while it runs, a picture of
+// what it changes. Opening a block (</>) shows its lines. mode "lines": every
+// line, with the blocks drawn as thin frames around them.
+
+// four border colours set one by one (React warns when borderColor and
+// borderLeftColor are mixed across renders)
+const sides = (all, left) => ({ borderTopColor: all, borderRightColor: all, borderBottomColor: all, borderLeftColor: left ?? all });
 
 const ICON = { CALL: "▸", IF: "◆", WHILE: "⟳", FOR: "⟳", RET: "↩", BRK: "⤓", CONT: "↺", AWAIT: "⏸" };
 
@@ -83,7 +93,7 @@ export function Frame({ fn, ctx, d, level }) {
       </div>
       {frame && <Vars frame={frame} prev={prev} big={big} color={mod.color} />}
       <div style={{ marginTop: frame ? 0 : 6 }}>
-        <Nodes nodes={spec.body} ctx={sub} />
+        {ctx.mode === "blocks" ? <BNodes nodes={spec.body} ctx={sub} /> : <Nodes nodes={spec.body} ctx={sub} />}
       </div>
     </div>
   );
@@ -120,6 +130,7 @@ const Conn = () => <span className="conn" />;
 
 function Node({ n, ctx }) {
   const { frame } = ctx;
+  if (n.t === "GRP") return <GroupFrame g={n} ctx={ctx} />;
   const cur = !!frame && frame.node === n.id;
   const callee = calleeOf(n);
   const childLive = cur && callee && ctx.frames && ctx.frames[ctx.d + 1] && ctx.frames[ctx.d + 1].fn === callee;
@@ -216,8 +227,8 @@ function Box({ n, ctx, cur, onPeek, peekOpen }) {
         title={onPeek ? (peekOpen ? "close" : `peek inside ${callee}`) : undefined}
         style={{
           "--c": c, fontSize: big ? 12.5 : level === "near" ? 10.5 : 9.5, padding: big ? "4px 10px" : "1px 7px", borderRadius: shape,
-          border: `1px solid ${cur ? c : n.t === "IF" ? "#FFC94D44" : n.t === "AWAIT" ? "#5FD3F355" : T.rule}`,
-          borderLeft: callee ? `3px solid ${calleeColor}` : undefined,
+          borderStyle: "solid", borderWidth: callee ? "1px 1px 1px 3px" : "1px",
+          ...sides(cur ? c : n.t === "IF" ? "#FFC94D44" : n.t === "AWAIT" ? "#5FD3F355" : T.rule, callee ? calleeColor : undefined),
           background: cur ? `${c}24` : note !== undefined ? T.panel : level === "peek" ? T.well : T.panel,
           boxShadow: cur ? `0 0 0 1px ${c}, 0 0 16px ${c}55` : "none",
           opacity: frame && note === undefined && !cur ? 0.62 : 1,
@@ -239,9 +250,167 @@ function Box({ n, ctx, cur, onPeek, peekOpen }) {
   );
 }
 
+// ---------------------------------------------------------------- blocks
+
+const hasGroup = (n) => n.desc.some((id) => NODE[id].t === "GRP");
+
+// lines mode: a thin titled frame around the block's lines
+function GroupFrame({ g, ctx }) {
+  const on = onPath(g, ctx.frame);
+  const c = ctx.mod.color;
+  return (
+    <div className="grp" style={{ borderColor: on ? `${c}77` : T.rule }}>
+      <span className="grp-title" style={{ color: on ? c : T.dim }}>{g.title}</span>
+      <Nodes nodes={g.body} ctx={ctx} />
+    </div>
+  );
+}
+
+function BNodes({ nodes, ctx }) {
+  const out = [];
+  let gap = 0;
+  const flush = (k) => {
+    if (gap) out.push(<Gap key={`g${k}`} n={gap} />);
+    gap = 0;
+  };
+  nodes.forEach((n, k) => {
+    if (ctx.trim && !onPath(n, ctx.frame)) {
+      gap++;
+      return;
+    }
+    flush(k);
+    if (out.length) out.push(<Conn key={`c${k}`} />);
+    out.push(n.t === "GRP" ? <GroupBox key={n.id} g={n} ctx={ctx} /> : hasGroup(n) ? <BContainer key={n.id} n={n} ctx={ctx} /> : <Node key={n.id} n={n} ctx={ctx} />);
+  });
+  flush("end");
+  return <div style={{ display: "grid", justifyItems: "stretch", minWidth: 0 }}>{out}</div>;
+}
+
+// a loop / if whose inside is made of blocks
+function BContainer({ n, ctx }) {
+  const { frame } = ctx;
+  const cur = !!frame && frame.node === n.id;
+  const box = <Box n={n} ctx={ctx} cur={cur} />;
+  if (n.t === "IF") {
+    const dec = frame ? frame.dec[n.id] : undefined;
+    return (
+      <div style={{ display: "grid", justifyItems: "start" }}>
+        {box}
+        <div className="branch" style={{ opacity: dec === false ? 0.38 : 1, justifyItems: "stretch" }}>
+          <span className="branch-label">yes</span>
+          <BNodes nodes={n.then} ctx={ctx} />
+        </div>
+        {n.els && <Branch label="else" nodes={n.els} ctx={ctx} dim={dec === true} />}
+      </div>
+    );
+  }
+  const inside = onPath(n, frame);
+  const it = frame && frame.iters[n.id];
+  const c = ctx.mod.color;
+  return (
+    <div className="loop" style={{ borderColor: inside ? `${c}aa` : T.rule, "--c": inside ? c : T.rule, justifyItems: "stretch" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {box}
+        {it > 0 && <Badge c={c} big={ctx.level === "focus"}>iter {it}</Badge>}
+      </div>
+      <Conn />
+      <BNodes nodes={n.body} ctx={ctx} />
+      <span className="backedge" />
+    </div>
+  );
+}
+
+const Badge = ({ c, big, children }) => (
+  <span style={{ fontFamily: mono, fontSize: big ? 10.5 : 9, fontWeight: 700, color: T.bg, background: c, borderRadius: 999, padding: "0 7px", whiteSpace: "nowrap" }}>{children}</span>
+);
+
+function GroupBox({ g, ctx }) {
+  const { frame, level } = ctx;
+  const c = ctx.mod.color;
+  const on = onPath(g, frame);
+  const big = level === "focus";
+  const live = on && big;
+  const open = ctx.expanded.has(g.id);
+  const ran = !!frame && g.desc.some((id) => frame.notes[id] !== undefined);
+
+  // the callees of this block, in order
+  const calls = [];
+  for (const id of g.desc) {
+    const fn = calleeOf(NODE[id]);
+    if (fn && !calls.includes(fn)) calls.push(fn);
+  }
+  const curNode = on ? NODE[frame.node] : null;
+  const callee = curNode && calleeOf(curNode);
+  const next = ctx.frames && ctx.frames[ctx.d + 1];
+  const childLive = !open && callee && next && next.fn === callee;
+  const peekKey = (fn) => `${ctx.thread}|${ctx.d}|${g.id}|${fn}`;
+  const peeks = open ? [] : calls.filter((fn) => !(childLive && fn === callee) && ctx.peek.has(peekKey(fn)));
+
+  // outermost loop inside the block that is running
+  const loopId = on && g.desc.find((id) => (NODE[id].t === "FOR" || NODE[id].t === "WHILE") && frame.iters[id] > 0);
+  const note = !frame ? undefined : on ? frame.notes[frame.node] : [...g.desc].reverse().map((id) => frame.notes[id]).find((x) => x !== undefined && x !== "");
+  const lines = g.desc.filter((id) => NODE[id].t !== "GRP").length;
+
+  return (
+    <div style={{ display: "grid", minWidth: 0 }}>
+      <div data-cur={on ? (big ? "focus" : "1") : undefined} className={`blk ${live ? "blk-live" : ""}`} style={{
+        "--c": c, borderLeftWidth: on ? 4 : 3, ...sides(on ? c : T.rule, on || !frame ? c : ran ? `${c}99` : `${c}44`),
+        background: on ? `${c}${big ? "1a" : "12"}` : T.panel, opacity: frame && !ran && !on ? 0.55 : 1,
+        padding: big ? "8px 12px 10px" : level === "near" ? "4px 9px" : "2px 8px",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: big ? 15 : level === "near" ? 12 : 10.5, fontWeight: 600, color: on ? T.ink : T.soft }}>{g.title}</span>
+          {loopId && <Badge c={c} big={big}>iter {frame.iters[loopId]}{frame.totals[loopId] ? `/${frame.totals[loopId]}` : ""}</Badge>}
+          {calls.map((fn) => {
+            const cc = MODS[FNS[fn].mod].color;
+            const active = childLive && fn === callee;
+            const peeked = ctx.peek.has(peekKey(fn));
+            return (
+              <button key={fn} onClick={() => !active && ctx.togglePeek(peekKey(fn))} title={active ? "running now" : peeked ? "close" : `peek inside ${fn}`} style={{
+                fontFamily: mono, fontSize: big ? 10.5 : 9, padding: "0 6px", borderRadius: 4, cursor: active ? "default" : "pointer",
+                border: `1px solid ${cc}${active ? "" : "77"}`, background: active ? cc : peeked ? `${cc}30` : "transparent", color: active ? T.bg : cc, fontWeight: active ? 700 : 500,
+              }}>→ {fn.split(".").pop()}</button>
+            );
+          })}
+          <button onClick={() => ctx.toggleExpand(g.id)} title={open ? "hide the code" : "show the code, step it line by line"} style={{
+            marginLeft: "auto", fontFamily: mono, fontSize: big ? 10.5 : 9, padding: "0 6px", borderRadius: 4, cursor: "pointer",
+            border: `1px solid ${open ? c : T.rule}`, background: open ? `${c}30` : "transparent", color: open ? c : T.dim,
+          }}>{"</>"} {lines}</button>
+        </div>
+        {live && g.viz && (
+          <div style={{ marginTop: 8 }}>
+            <BlockViz kind={g.viz} ev={ctx.ev} frames={ctx.frames} cfg={ctx.cfg} hashInfo={ctx.hashInfo} color={c} />
+          </div>
+        )}
+        {note !== undefined && note !== "" && !open && (
+          <div key={live ? frame.node + note : undefined} className={live ? "title-in" : ""} style={{
+            fontFamily: mono, fontSize: big ? 12 : 9.5, color: on ? "#9FE8D9" : "#7FBFB2", fontStyle: "italic", marginTop: big ? 6 : 1,
+            whiteSpace: big ? "pre-wrap" : "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+          }}># {note}</div>
+        )}
+        {open && (
+          <div style={{ marginTop: 6, overflowX: "auto" }}>
+            <Nodes nodes={g.body} ctx={ctx} />
+          </div>
+        )}
+      </div>
+      {childLive && (
+        <Sub color={MODS[FNS[callee].mod].color}>
+          <Frame fn={callee} ctx={ctx} d={ctx.d + 1} level={levelOf(ctx, ctx.d + 1)} />
+        </Sub>
+      )}
+      {peeks.map((fn) => (
+        <Sub key={fn} color={MODS[FNS[fn].mod].color} dashed>
+          <Frame fn={fn} ctx={{ ...ctx, frames: null }} d={0} level="peek" />
+        </Sub>
+      ))}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- whole canvas
 
-export function FlowCanvas({ ev, prev, peek, togglePeek, showAll }) {
+export function FlowCanvas({ ev, prev, peek, togglePeek, showAll, mode, expanded, toggleExpand, cfg, hashInfo }) {
   const box = useRef(null);
   useEffect(() => {
     const el = box.current && (box.current.querySelector("[data-cur='focus']") || box.current.querySelector("[data-cur='1']"));
@@ -249,7 +418,7 @@ export function FlowCanvas({ ev, prev, peek, togglePeek, showAll }) {
   }, [ev]);
 
   return (
-    <div ref={box} className="flow-canvas">
+    <div ref={box} className={`flow-canvas ${mode === "blocks" ? "fit" : ""}`}>
       {ev.threads.map((t) => {
         const live = t.name === ev.thread;
         const pt = prev && prev.threads.find((x) => x.name === t.name);
@@ -263,7 +432,7 @@ export function FlowCanvas({ ev, prev, peek, togglePeek, showAll }) {
             </div>
             {t.frames.length ? (
               <Frame fn={t.frames[0].fn} d={0} level={levelOf({ live, frames: t.frames }, 0)}
-                ctx={{ frames: t.frames, prevFrames: pt && pt.frames, live, thread: t.name, peek, togglePeek, showAll }} />
+                ctx={{ frames: t.frames, prevFrames: pt && pt.frames, live, thread: t.name, peek, togglePeek, showAll, mode, expanded, toggleExpand, cfg, hashInfo, ev }} />
             ) : (
               <span style={{ fontFamily: mono, fontSize: 10, color: T.dim, marginLeft: 16 }}>returned</span>
             )}

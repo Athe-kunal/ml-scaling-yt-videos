@@ -8,7 +8,9 @@ import { MODS } from "../flow/world";
 //   into  = the very next event (descends into calls)
 //   over  = next event of this thread at the same depth or shallower
 //   out   = next event of this thread shallower than now (finish this function)
-export function useDebugger(events) {
+// Only events marked in `stops` are landed on: in blocks mode that is the last
+// event of each block run (or every line of a block that is opened).
+export function useDebugger(events, stops) {
   const [i, setI] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(650);
@@ -16,15 +18,16 @@ export function useDebugger(events) {
   const ev = events[Math.min(i, last)];
 
   const find = (from, dir, ok) => {
-    for (let j = from + dir; j >= 0 && j <= last; j += dir) if (ok(events[j])) return j;
+    for (let j = from + dir; j >= 0 && j <= last; j += dir) if (stops[j] && ok(events[j])) return j;
     return -1;
   };
+  const any = () => true;
   const same = (e) => e.thread === ev.thread;
   const go = {
-    into: () => Math.min(i + 1, last),
-    over: () => { const j = find(i, 1, (e) => same(e) && e.depth <= ev.depth); return j < 0 ? Math.min(i + 1, last) : j; },
+    into: () => { const j = find(i, 1, any); return j < 0 ? last : j; },
+    over: () => { const j = find(i, 1, (e) => same(e) && e.depth <= ev.depth); return j < 0 ? go.into() : j; },
     out: () => { const j = find(i, 1, (e) => same(e) && e.depth < ev.depth); return j < 0 ? last : j; },
-    back: () => Math.max(i - 1, 0),
+    back: () => { const j = find(i, -1, any); return j < 0 ? 0 : j; },
     backOver: () => { const j = find(i, -1, (e) => same(e) && e.depth <= ev.depth); return j < 0 ? 0 : j; },
     nextStep: () => { const j = find(i, 1, (e) => e.group > ev.group); return j < 0 ? last : j; },
     prevStep: () => {
@@ -55,11 +58,19 @@ export function useDebugger(events) {
   const isPlaying = playing && i < last;
   useEffect(() => {
     if (!isPlaying) return;
-    const t = setTimeout(() => setI((x) => Math.min(x + 1, last)), speed);
+    const t = setTimeout(() => setI((x) => {
+      for (let j = x + 1; j <= last; j++) if (stops[j]) return j;
+      return last;
+    }), speed);
     return () => clearTimeout(t);
-  }, [isPlaying, i, speed, last]);
+  }, [isPlaying, i, speed, last, stops]);
 
-  return { i: Math.min(i, last), setI, ev, go, playing: isPlaying, setPlaying, speed, setSpeed, last };
+  let pos = 0, nStops = 0;
+  for (let j = 0; j <= last; j++) if (stops[j]) {
+    nStops++;
+    if (j <= i) pos++;
+  }
+  return { i: Math.min(i, last), setI, ev, go, playing: isPlaying, setPlaying, speed, setSpeed, last, pos, nStops };
 }
 
 const Btn = ({ onClick, disabled, children, title, accent }) => (
@@ -88,7 +99,7 @@ export function DebugBar({ dbg, events }) {
           style={{ fontFamily: mono, fontSize: 11, height: 30, background: T.well, color: T.soft, border: `1px solid ${T.rule}`, borderRadius: 6 }}>
           <option value={1200}>slow</option><option value={650}>normal</option><option value={250}>fast</option><option value={60}>very fast</option>
         </select>
-        <span style={{ fontFamily: mono, fontSize: 11, color: T.dim, marginLeft: "auto" }}>{i + 1} / {events.length}</span>
+        <span style={{ fontFamily: mono, fontSize: 11, color: T.dim, marginLeft: "auto" }}>{dbg.pos} / {dbg.nStops}</span>
       </div>
       <div style={{ display: "flex", gap: 3 }}>
         {groups.map((g) => {
