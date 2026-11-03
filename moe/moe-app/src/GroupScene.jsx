@@ -38,17 +38,28 @@ function Ticket({ x, y, e, label, hollow, bad, on, delay }) {
   );
 }
 
-export default function GroupScene({ gm, stage }) {
-  const counts = stage < 3 ? Array(E).fill(0) : stage < 5 ? gm.cPass1 : gm.cFinal;
+// loop = { n, cur, ph }: tokens before n are finished, token cur is mid-iteration
+// at phase ph (pass 1: 1 row · 4 read c · 5 compare · 6 store · 7 count;
+// pass 2: 1 row · 4 dice · 5 read c · 6 condition · 7 store · 8 count)
+export default function GroupScene({ gm, stage, loop }) {
+  const lp = loop && (stage === 3 || stage === 5) ? loop : null;
+  const done = (k, ph) => lp && (k.s < lp.n || (k.s === lp.cur && lp.ph >= ph));
+  let counts = stage < 3 ? Array(E).fill(0) : stage < 5 ? gm.cPass1 : gm.cFinal;
+  if (lp && stage === 3) { counts = Array(E).fill(0); gm.toks.forEach((k) => { if (done(k, 7)) counts[k.e1] += 1; }); }
+  if (lp && stage === 5) { counts = [...gm.cPass1]; gm.toks.forEach((k) => { if (done(k, 8)) counts[k.e2] += 1; }); }
   const showT1 = stage >= 2;
+  const curTok = lp && lp.cur >= 0 ? gm.toks[lp.cur] : null;
+  const hotE = curTok && (stage === 3 ? (lp.ph >= 4 ? curTok.e1 : -1) : lp.ph >= 5 ? curTok.e2 : -1);
 
   // where does each ticket sit at this stage
   const t1Pos = (k) => {
     if (stage < 3) return [T1X, rowY(k.s)];
+    if (lp && stage === 3 && !done(k, k.t1.ok ? 6 : 7)) return [T1X, rowY(k.s)];
     return k.t1.ok ? slotXY(k.e1, k.t1.pos) : overXY(k.e1, k.t1.pos - C);
   };
   const t2Pos = (k) => {
     if (stage < 5) return [T2X, rowY(k.s)];
+    if (lp && !done(k, k.t2.ok ? 7 : 8)) return [T2X, rowY(k.s)];
     if (k.t2.ok) return slotXY(k.e2, k.t2.pos);
     return k.t2.capOk ? [T2X, rowY(k.s)] : overXY(k.e2, k.t2.pos - C);
   };
@@ -73,6 +84,7 @@ export default function GroupScene({ gm, stage }) {
         const dropped = stage >= 6 && k.final.length === 0;
         return (
           <g key={k.s} opacity={dropped ? 0.9 : 1}>
+            {curTok && curTok.s === k.s && <rect x={12} y={y - 16} width={398} height={32} rx={8} fill="none" stroke={T.accent} strokeWidth={1.6} />}
             <rect x={20} y={y - 11} width={44} height={22} rx={5} fill={T.well} stroke={dropped ? T.bad : T.rule} strokeDasharray={dropped ? "3 3" : "none"} />
             <text x={42} y={y + 4} textAnchor="middle" fontFamily={mono} fontSize="11" fontWeight="600" fill={T.ink}>x{k.s}</text>
             {gm.gates[k.s].map((g, e) => {
@@ -94,9 +106,16 @@ export default function GroupScene({ gm, stage }) {
             })}
 
             {/* dice / weights column */}
-            {stage === 5 && (
-              <text x={INFOX} y={y + 4} fontFamily={mono} fontSize="10.5" fill={k.t2.capOk ? (k.t2.diceOk ? T.accent : T.bad) : T.bad}>
-                {k.t2.capOk ? `${f2(k.rnd)} < ${f2(2 * k.g2n)} ${k.t2.diceOk ? "✓" : "✕"}` : "buffer full ✕"}
+            {stage === 5 && (!lp || done(k, 6) || (k.s === lp.cur && lp.ph >= 4)) && (
+              <text x={INFOX} y={y + 4} fontFamily={mono} fontSize="10.5" fill={lp && !done(k, 6) ? T.wire : k.t2.capOk ? (k.t2.diceOk ? T.accent : T.bad) : T.bad}>
+                {lp && !done(k, 6)
+                  ? `rnd = ${f2(k.rnd)}${lp.ph >= 5 ? `  c = ${k.t2.pos}` : ""}`
+                  : k.t2.capOk ? `${f2(k.rnd)} < ${f2(2 * k.g2n)} ${k.t2.diceOk ? "✓" : "✕"}` : "buffer full ✕"}
+              </text>
+            )}
+            {stage === 3 && lp && k.s === lp.cur && lp.ph >= 4 && (
+              <text x={INFOX} y={y + 4} fontFamily={mono} fontSize="10.5" fill={lp.ph >= 5 ? (k.t1.ok ? T.accent : T.bad) : T.wire}>
+                {lp.ph >= 5 ? `${k.t1.pos} ${k.t1.ok ? "<" : "≥"} ${C} ${k.t1.ok ? "✓" : "✕"}` : `c = ${k.t1.pos}`}
               </text>
             )}
             {stage >= 6 && (
@@ -143,7 +162,7 @@ export default function GroupScene({ gm, stage }) {
         const over = counts[e] > C;
         return (
           <g key={e}>
-            <rect x={x} y={top} width={70} height={C * SLOT + 4} rx={6} fill={T.well} stroke={over ? T.bad : EC[e]} strokeWidth={over ? 2 : 1.3} style={{ transition: "stroke .3s" }} />
+            <rect x={x} y={top} width={70} height={C * SLOT + 4} rx={6} fill={T.well} stroke={over ? T.bad : e === hotE ? T.ink : EC[e]} strokeWidth={over || e === hotE ? 2.6 : 1.3} style={{ transition: "stroke .3s" }} />
             {Array.from({ length: C }, (_, k) => (
               <rect key={k} x={x + 5} y={BOT - (k + 1) * SLOT + 2} width={60} height={SLOT - 4} rx={4} fill="none" stroke={EC[e]} strokeOpacity={0.3} strokeDasharray="3 3" />
             ))}
@@ -159,11 +178,12 @@ export default function GroupScene({ gm, stage }) {
       {gm.toks.map((k) => {
         const [x1, y1] = t1Pos(k);
         const [x2, y2] = t2Pos(k);
-        const gone2 = stage >= 5 && !k.t2.ok && k.t2.capOk;
+        const dec2 = !lp || stage !== 5 || done(k, 6);
+        const gone2 = stage >= 5 && !k.t2.ok && k.t2.capOk && dec2;
         return (
           <g key={k.s}>
-            <Ticket x={x1} y={y1} e={k.e1} label={k.s} on={showT1} bad={stage >= 3 && !k.t1.ok} delay={stage === 3 ? k.s * 110 : 0} />
-            <Ticket x={x2} y={y2} e={k.e2} label={k.s} hollow on={showT1 && !gone2} bad={stage >= 5 && !k.t2.ok} delay={stage === 5 ? k.s * 110 : 0} />
+            <Ticket x={x1} y={y1} e={k.e1} label={k.s} on={showT1} bad={stage >= 3 && !k.t1.ok && (!lp || stage !== 3 || done(k, 5))} delay={stage === 3 && !lp ? k.s * 110 : 0} />
+            <Ticket x={x2} y={y2} e={k.e2} label={k.s} hollow on={showT1 && !gone2} bad={stage >= 5 && !k.t2.ok && dec2} delay={stage === 5 && !lp ? k.s * 110 : 0} />
           </g>
         );
       })}

@@ -2,6 +2,7 @@ import { T, mono } from "./theme";
 import { LB, XC, scoresOf, route, loadsOf, auxTerms, simulate } from "./lbModel";
 import { Bars, Lines, f2 } from "./charts";
 import Stepper from "./Stepper";
+import { DS_GLOSSARY, DS_SHAPES } from "./lbShapes";
 
 // DeepSeek-V3 (arXiv 2412.19437, §2.1.2): sigmoid router, auxiliary balance loss
 // (eq. 17-20, sequence-wise), then auxiliary-loss-free balancing (eq. 16):
@@ -18,27 +19,29 @@ const SNAPS = [1, 3, 6, 12, 25, 50];
 const W = 860, H = 430;
 
 const BLOCKS = [
-  { id: "route", label: "route with sigmoid + top-K", sub: "eq. 13–15", code: ["s   = sigmoid(u @ e.T)            # eq 15", "idx = topk(s, K)                   # eq 14", "g   = s[idx] / s[idx].sum()        # eq 13"] },
-  { id: "aux", label: "auxiliary balance loss", sub: "eq. 17–20 · f_i · P_i", code: ["f = N/(K*T) * onehot(idx).sum(0)   # eq 18", "P = (s / s.sum(-1)).mean(0)         # eq 19-20", "L_bal = alpha * (f * P).sum()       # eq 17"] },
-  { id: "bias", label: "bias steers selection", sub: "loss-free · eq. 16", code: ["idx = topk(s + b, K)               # eq 16: bias picks…", "g   = s[idx] / s[idx].sum()        # …gate uses s only"] },
-  { id: "monitor", label: "monitor expert load", sub: "whole batch, every step", code: ["load = onehot(idx).sum(0)          # tokens per expert"] },
-  { id: "update", label: "bias update", sub: "± γ", code: ["err = load.mean() - load", "b  += gamma * sign(err)           # overloaded ↓, underloaded ↑"] },
+  { id: "route", label: "route with sigmoid + top-K", sub: "eq. 13–15", code: ["s   = sigmoid(u @ e.T)            # [T,d]·[d,N] → [T,N]  (eq 15)", "idx = topk(s, K)                   # [T,N] → [T,K]  (eq 14)", "g   = s[idx] / s[idx].sum()        # [T,K]  (eq 13)"] },
+  { id: "aux", label: "auxiliary balance loss", sub: "eq. 17–20 · f_i · P_i", code: ["f = N/(K*T) * onehot(idx).sum(0)   # [T,K,N] → [N]  (eq 18)", "P = (s / s.sum(-1)).mean(0)         # [T,N] → [N]  (eq 19-20)", "L_bal = alpha * (f * P).sum()       # [N]·[N] → scalar  (eq 17)"] },
+  { id: "bias", label: "bias steers selection", sub: "loss-free · eq. 16", code: ["idx = topk(s + b, K)               # [T,N] + [N] → [T,K]  (eq 16: bias picks…)", "g   = s[idx] / s[idx].sum()        # [T,K]  …gate uses s only"] },
+  { id: "monitor", label: "monitor expert load", sub: "whole batch, every step", code: ["load = onehot(idx).sum(0)          # [T,K,N] → [N]  tokens per expert"] },
+  { id: "update", label: "bias update", sub: "± γ", code: ["err = load.mean() - load         # [N]", "b  += gamma * sign(err)           # [N]  overloaded ↓, underloaded ↑"] },
   { id: "loop", label: "repeat each training step", sub: "balance emerges", loop: true, code: ["for step in training:", "    idx  = topk(s + b, K)", "    load = count(idx)", "    b   += gamma * sign(load.mean() - load)"] },
   { id: "recipe", label: "V3 recipe", sub: "bias + tiny α loss" , code: ["loss = lm_loss + alpha * L_bal   # alpha extremely small", "# bias does the batch-level balancing"] },
 ];
 
 const STEPS = [
-  { id: "scores", block: "route", scene: "heat", stage: 0, caption: "sigmoid affinity of every token for every expert", vars: () => [["T tokens", `${TT}`], ["N experts", `${n}`], ["K", `${k}`]] },
-  { id: "topk", block: "route", scene: "heat", stage: 1, caption: "keep top-K, normalise the kept scores into gates", vars: () => [["gate", "s / Σ s_sel"]] },
-  { id: "skew", block: "route", scene: "heat", stage: 2, caption: "popular experts hog the tokens: routing collapse", vars: () => [["max load", `${Math.max(...AUX.cnt)}`, "bad"], ["fair share", `${(TT * k) / n}`]] },
-  { id: "f", block: "aux", scene: "aux", stage: 0, caption: "f_i: how much of its fair share each expert got", vars: () => [["f", `[${AUX.f.map((x) => f2(x)).join(" ")}]`]] },
-  { id: "P", block: "aux", scene: "aux", stage: 1, caption: "P_i: how much the router likes each expert (smooth)", vars: () => [["Σ P", "1"]] },
-  { id: "L", block: "aux", scene: "aux", stage: 2, caption: "L_bal = α·Σ f_i·P_i: gradient pushes busy experts down", vars: () => [["Σ f·P", AUX.loss.toFixed(2), "bad"], ["balanced", "1.00"]] },
-  { id: "select", block: "bias", scene: "bias", caption: "add b to the score to choose experts; gate keeps raw s", vars: () => [["select", "s + b"], ["weight", "s"]] },
-  { id: "monitor", block: "monitor", scene: "monitor", caption: "count tokens per expert over the whole batch", vars: () => [["batch", `${LB.m} tokens`], ["mean load", `${(LB.m * k) / n}`]] },
-  { id: "update", block: "update", scene: "update", caption: "overloaded: b − γ · underloaded: b + γ", vars: () => [["γ", `${GAMMA}`], ["paper γ", "0.001"]] },
-  ...SNAPS.map((t) => ({ id: `t${t}`, block: "loop", scene: "loop", t, caption: `after ${t} training step${t > 1 ? "s" : ""}: load flattens`, vars: () => [["step", `${t}`], ["load CV", SIM[t].cv.toFixed(2)]] })),
-  { id: "recipe", block: "recipe", scene: "recipe", caption: "bias balances batches, tiny loss guards each sequence", vars: () => [["tokens dropped", "0"]] },
+  { id: "scores", block: "route", lines: [0], scene: "heat", stage: 0, caption: "sigmoid affinity of every token for every expert", vars: () => [["T tokens", `${TT}`], ["N experts", `${n}`], ["K", `${k}`]] },
+  { id: "topk", block: "route", lines: [1], scene: "heat", stage: 1, caption: "keep the top-K scores of each token", vars: () => [["K", `${k}`]] },
+  { id: "gate", block: "route", lines: [2], scene: "heat", stage: 1.5, caption: "normalise the kept scores into gates", vars: () => [["gate", "s / Σ s_sel"]] },
+  { id: "skew", block: "route", lines: [], scene: "heat", stage: 2, caption: "popular experts hog the tokens: routing collapse", vars: () => [["max load", `${Math.max(...AUX.cnt)}`, "bad"], ["fair share", `${(TT * k) / n}`]] },
+  { id: "f", block: "aux", lines: [0], scene: "aux", stage: 0, caption: "f_i: how much of its fair share each expert got", vars: () => [["f", `[${AUX.f.map((x) => f2(x)).join(" ")}]`]] },
+  { id: "P", block: "aux", lines: [1], scene: "aux", stage: 1, caption: "P_i: how much the router likes each expert (smooth)", vars: () => [["Σ P", "1"]] },
+  { id: "L", block: "aux", lines: [2], scene: "aux", stage: 2, caption: "L_bal = α·Σ f_i·P_i: gradient pushes busy experts down", vars: () => [["Σ f·P", AUX.loss.toFixed(2), "bad"], ["balanced", "1.00"]] },
+  { id: "select", block: "bias", lines: [0, 1], visAt: 0, scene: "bias", caption: "add b to the score to choose experts; gate keeps raw s", vars: () => [["select", "s + b"], ["weight", "s"]] },
+  { id: "monitor", block: "monitor", lines: [0], scene: "monitor", caption: "count tokens per expert over the whole batch", vars: () => [["batch", `${LB.m} tokens`], ["mean load", `${(LB.m * k) / n}`]] },
+  { id: "err", block: "update", lines: [0], scene: "update", stage: 0, caption: "error: how far each expert is from the mean load", vars: () => [["γ", `${GAMMA}`]] },
+  { id: "update", block: "update", lines: [1], scene: "update", stage: 1, caption: "overloaded: b − γ · underloaded: b + γ", vars: () => [["γ", `${GAMMA}`], ["paper γ", "0.001"]] },
+  ...SNAPS.map((t) => ({ id: `t${t}`, block: "loop", lines: [1, 2, 3], visAt: 2, scene: "loop", t, caption: `after ${t} training step${t > 1 ? "s" : ""}: load flattens`, vars: () => [["step", `${t}`], ["load CV", SIM[t].cv.toFixed(2)]] })),
+  { id: "recipe", block: "recipe", lines: [0, 1], visAt: 0, scene: "recipe", caption: "bias balances batches, tiny loss guards each sequence", vars: () => [["tokens dropped", "0"]] },
 ];
 
 function Heat({ scores, rt, base, stage, bias }) {
@@ -73,7 +76,7 @@ function Heat({ scores, rt, base, stage, bias }) {
                   />
                   {show && (
                     <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + t * ch + 12} textAnchor="middle" fontFamily={mono} fontSize="9.5" fontWeight="600" fill={T.ink}>
-                      {stage >= 1 && on && !bias ? f2(s / gsum) : f2(s)}
+                      {stage >= 1.5 && on && !bias ? f2(s / gsum) : f2(s)}
                     </text>
                   )}
                 </g>
@@ -101,7 +104,7 @@ function Scene({ step }) {
             <text x={500} y={355} fontFamily={mono} fontSize="11" fill={T.dim}>E0 and E1 take {AUX.cnt[0] + AUX.cnt[1]} of {TT * k} routes</text>
           </g>
         )}
-        {step.stage === 1 && <text x={500} y={120} fontFamily={mono} fontSize="11.5" fill={T.soft}>ringed = chosen · number = gate g</text>}
+        {step.stage >= 1 && step.stage < 2 && <text x={500} y={120} fontFamily={mono} fontSize="11.5" fill={T.soft}>ringed = chosen{step.stage >= 1.5 ? " · number = gate g" : ""}</text>}
       </g>
     );
   } else if (step.scene === "aux") {
@@ -159,9 +162,9 @@ function Scene({ step }) {
     body = (
       <g>
         <Bars x={30} y={70} w={380} h={220} values={err} fmt={(v) => v.toFixed(0)} title="mean load − load_j" arrows={err.map((v) => Math.sign(v))} />
-        <Bars x={450} y={70} w={380} h={220} values={b1} min={-GAMMA * 1.5} max={GAMMA * 1.5} fmt={(v) => v.toFixed(3)} title="NEW BIAS b_j  (STARTED AT 0)" />
-        <text x={30} y={340} fontFamily={mono} fontSize="13" fontWeight="700" fill={T.accent2}>b_j ← b_j + γ · sign(mean − load_j)</text>
-        <text x={30} y={364} fontFamily={mono} fontSize="11" fill={T.dim}>fixed step γ = {GAMMA}: same size for a mild or a huge imbalance</text>
+        {step.stage >= 1 && <Bars x={450} y={70} w={380} h={220} values={b1} min={-GAMMA * 1.5} max={GAMMA * 1.5} fmt={(v) => v.toFixed(3)} title="NEW BIAS b_j  (STARTED AT 0)" />}
+        {step.stage >= 1 && <text x={30} y={340} fontFamily={mono} fontSize="13" fontWeight="700" fill={T.accent2}>b_j ← b_j + γ · sign(mean − load_j)</text>}
+        {step.stage >= 1 && <text x={30} y={364} fontFamily={mono} fontSize="11" fill={T.dim}>fixed step γ = {GAMMA}: same size for a mild or a huge imbalance</text>}
       </g>
     );
   } else if (step.scene === "loop") {
@@ -203,6 +206,8 @@ export default function DeepSeekView() {
       blocks={BLOCKS}
       steps={STEPS}
       scene={(step) => <Scene step={step} />}
+      glossary={DS_GLOSSARY}
+      shapes={(step) => DS_SHAPES[step.block === "loop" ? "loop" : step.sid]}
       legend={<span>source: DeepSeek-V3 Technical Report, §2.1.2 (eq. 12–20) · <span style={{ color: T.wire }}>dashed</span> = balanced level</span>}
     />
   );
