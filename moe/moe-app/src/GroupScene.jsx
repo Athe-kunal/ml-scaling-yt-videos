@@ -1,0 +1,199 @@
+import { T, mono } from "./theme";
+import { CFG, EXPERT_COLORS as EC } from "./moeModel";
+
+// Algorithm 1 for ONE group on one device. Rows are the group's tokens, the
+// four gate bars per row are g_SE, the buckets on the right are the expert
+// buffers (capacity C). Tickets (solid = 1st choice, ring = 2nd choice) fly
+// from the token row into a bucket slot, or bounce onto the red overflow
+// stack when c_e >= C.
+//
+// stage: 0 gates · 1 mean · 2 top-2 · 3 pass 1 · 4 aux loss · 5 pass 2 · 6 result
+
+const { S, E, C } = CFG;
+const W = 860, H = 490;
+const ROW0 = 62, ROWH = 38;
+const GX = 92, GW = 58;
+const T1X = 348, T2X = 382, INFOX = 412;
+const BX = 520, BXW = 84, BOT = 300, SLOT = 28;
+
+const rowY = (s) => ROW0 + s * ROWH;
+const slotXY = (e, k) => [BX + e * BXW + 35, BOT - (k + 1) * SLOT + 13];
+const overXY = (e, j) => [BX + e * BXW + 35, BOT - C * SLOT - 16 - Math.min(j, 3) * 24];
+const f2 = (x) => x.toFixed(2).replace(/^0/, "");
+
+function Ticket({ x, y, e, label, hollow, bad, on, delay }) {
+  return (
+    <g
+      style={{
+        transform: `translate(${x}px, ${y}px)`,
+        opacity: on ? 1 : 0,
+        transition: `transform .75s cubic-bezier(.3,.7,.3,1) ${delay}ms, opacity .35s ${delay}ms`,
+      }}
+    >
+      <circle r={10} fill={hollow ? T.bg : EC[e]} stroke={bad ? T.bad : EC[e]} strokeWidth={hollow ? 2.2 : bad ? 2.4 : 0} />
+      <text textAnchor="middle" y={4} fontFamily={mono} fontSize="11" fontWeight="700" fill={hollow ? EC[e] : "#0A0E14"}>
+        {label}
+      </text>
+    </g>
+  );
+}
+
+export default function GroupScene({ gm, stage }) {
+  const counts = stage < 3 ? Array(E).fill(0) : stage < 5 ? gm.cPass1 : gm.cFinal;
+  const showT1 = stage >= 2;
+
+  // where does each ticket sit at this stage
+  const t1Pos = (k) => {
+    if (stage < 3) return [T1X, rowY(k.s)];
+    return k.t1.ok ? slotXY(k.e1, k.t1.pos) : overXY(k.e1, k.t1.pos - C);
+  };
+  const t2Pos = (k) => {
+    if (stage < 5) return [T2X, rowY(k.s)];
+    if (k.t2.ok) return slotXY(k.e2, k.t2.pos);
+    return k.t2.capOk ? [T2X, rowY(k.s)] : overXY(k.e2, k.t2.pos - C);
+  };
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
+      {/* column headers */}
+      <g fontFamily={mono} fontSize="10" fill={T.dim} letterSpacing="0.1em">
+        <text x={20} y={34}>TOKEN</text>
+        <text x={GX} y={34}>GATE g · ONE BAR PER EXPERT</text>
+        {showT1 && <text x={T1X - 12} y={34}>TOP-2</text>}
+        {stage >= 5 && <text x={INFOX} y={34}>{stage >= 6 ? "WEIGHTS" : "DICE"}</text>}
+        <text x={BX} y={34}>EXPERT BUFFERS · CAP C = {C}</text>
+      </g>
+      {Array.from({ length: E }, (_, e) => (
+        <text key={e} x={GX + e * GW + (GW - 8) / 2} y={52} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={EC[e]}>E{e}</text>
+      ))}
+
+      {/* token rows: gate bars */}
+      {gm.toks.map((k) => {
+        const y = rowY(k.s);
+        const dropped = stage >= 6 && k.final.length === 0;
+        return (
+          <g key={k.s} opacity={dropped ? 0.9 : 1}>
+            <rect x={20} y={y - 11} width={44} height={22} rx={5} fill={T.well} stroke={dropped ? T.bad : T.rule} strokeDasharray={dropped ? "3 3" : "none"} />
+            <text x={42} y={y + 4} textAnchor="middle" fontFamily={mono} fontSize="11" fontWeight="600" fill={T.ink}>x{k.s}</text>
+            {gm.gates[k.s].map((g, e) => {
+              const top = e === k.e1 || e === k.e2;
+              const lit = stage < 2 || top;
+              return (
+                <g key={e}>
+                  <rect x={GX + e * GW} y={y - 8} width={GW - 8} height={16} rx={3} fill={T.well} />
+                  <rect
+                    x={GX + e * GW} y={y - 8} width={(GW - 8) * g} height={16} rx={3} fill={EC[e]}
+                    opacity={lit ? 0.9 : 0.22} style={{ transition: "opacity .4s, width .5s" }}
+                  />
+                  <text
+                    x={GX + e * GW + (g > 0.45 ? 4 : (GW - 8) * g + 4)} y={y + 3.5} fontFamily={mono} fontSize="9.5" fontWeight="600"
+                    fill={g > 0.45 && lit ? "#0A0E14" : T.soft}
+                  >{f2(g)}</text>
+                </g>
+              );
+            })}
+
+            {/* dice / weights column */}
+            {stage === 5 && (
+              <text x={INFOX} y={y + 4} fontFamily={mono} fontSize="10.5" fill={k.t2.capOk ? (k.t2.diceOk ? T.accent : T.bad) : T.bad}>
+                {k.t2.capOk ? `${f2(k.rnd)} < ${f2(2 * k.g2n)} ${k.t2.diceOk ? "✓" : "✕"}` : "buffer full ✕"}
+              </text>
+            )}
+            {stage >= 6 && (
+              k.final.length === 0 ? (
+                <text x={INFOX} y={y + 4} fontFamily={mono} fontSize="10.5" fill={T.bad}>∅ residual</text>
+              ) : (
+                <g>
+                  {(() => {
+                    let off = 0;
+                    return k.final.map((f, i) => {
+                      const w = 92 * f.w;
+                      const r = <rect key={i} x={INFOX + off} y={y - 6} width={w} height={12} rx={3} fill={EC[f.e]} />;
+                      off += w;
+                      return r;
+                    });
+                  })()}
+                  <text x={INFOX + 98} y={y + 4} fontFamily={mono} fontSize="9" fill={T.dim}>{k.final.length === 2 ? "×2" : "×1"}</text>
+                </g>
+              )
+            )}
+          </g>
+        );
+      })}
+
+      {/* mean row */}
+      {stage >= 1 && (
+        <g>
+          <line x1={20} x2={GX + E * GW - 8} y1={rowY(S - 1) + 24} y2={rowY(S - 1) + 24} stroke={T.rule} />
+          <text x={42} y={rowY(S - 1) + 46} textAnchor="middle" fontFamily={mono} fontSize="11" fontWeight="700" fill={T.wire}>m_e</text>
+          {gm.m.map((m, e) => (
+            <g key={e}>
+              <rect x={GX + e * GW} y={rowY(S - 1) + 36} width={GW - 8} height={16} rx={3} fill={T.well} />
+              <rect x={GX + e * GW} y={rowY(S - 1) + 36} width={(GW - 8) * m} height={16} rx={3} fill={T.wire} opacity={0.9} />
+              <text x={GX + e * GW + (GW - 8) * m + 4} y={rowY(S - 1) + 47.5} fontFamily={mono} fontSize="9.5" fontWeight="600" fill={T.wire}>{f2(m)}</text>
+            </g>
+          ))}
+        </g>
+      )}
+
+      {/* expert buffers */}
+      {Array.from({ length: E }, (_, e) => {
+        const x = BX + e * BXW;
+        const top = BOT - C * SLOT - 2;
+        const over = counts[e] > C;
+        return (
+          <g key={e}>
+            <rect x={x} y={top} width={70} height={C * SLOT + 4} rx={6} fill={T.well} stroke={over ? T.bad : EC[e]} strokeWidth={over ? 2 : 1.3} style={{ transition: "stroke .3s" }} />
+            {Array.from({ length: C }, (_, k) => (
+              <rect key={k} x={x + 5} y={BOT - (k + 1) * SLOT + 2} width={60} height={SLOT - 4} rx={4} fill="none" stroke={EC[e]} strokeOpacity={0.3} strokeDasharray="3 3" />
+            ))}
+            <text x={x + 35} y={BOT + 22} textAnchor="middle" fontFamily={mono} fontSize="12" fontWeight="700" fill={EC[e]}>E{e}</text>
+            <text x={x + 35} y={BOT + 40} textAnchor="middle" fontFamily={mono} fontSize="11.5" fontWeight="600" fill={over ? T.bad : T.soft}>
+              c = {counts[e]}<tspan fill={T.dim} fontWeight="400"> / {C}</tspan>
+            </text>
+          </g>
+        );
+      })}
+
+      {/* tickets */}
+      {gm.toks.map((k) => {
+        const [x1, y1] = t1Pos(k);
+        const [x2, y2] = t2Pos(k);
+        const gone2 = stage >= 5 && !k.t2.ok && k.t2.capOk;
+        return (
+          <g key={k.s}>
+            <Ticket x={x1} y={y1} e={k.e1} label={k.s} on={showT1} bad={stage >= 3 && !k.t1.ok} delay={stage === 3 ? k.s * 110 : 0} />
+            <Ticket x={x2} y={y2} e={k.e2} label={k.s} hollow on={showT1 && !gone2} bad={stage >= 5 && !k.t2.ok} delay={stage === 5 ? k.s * 110 : 0} />
+          </g>
+        );
+      })}
+
+      {/* aux loss panel */}
+      {stage === 4 && (
+        <g>
+          <g fontFamily={mono} fontSize="10.5" fill={T.dim}>
+            <rect x={20} y={352} width={12} height={12} rx={2} fill={T.soft} />
+            <text x={38} y={362}>c_e / S  (fraction routed)</text>
+            <rect x={20} y={374} width={12} height={12} rx={2} fill="none" stroke={T.soft} strokeWidth={1.5} />
+            <text x={38} y={384}>m_e  (mean gate)</text>
+          </g>
+          <text x={20} y={426} fontFamily={mono} fontSize="13" fontWeight="700" fill={T.accent2}>ℓ_aux = {gm.aux.toFixed(3)}</text>
+          <text x={20} y={446} fontFamily={mono} fontSize="11" fill={T.dim}>perfectly balanced = {(1 / (E * E)).toFixed(4)}</text>
+          {Array.from({ length: E }, (_, e) => {
+            const x = BX + e * BXW;
+            const a = gm.cPass1[e] / S, b = gm.m[e];
+            const sc = 130;
+            return (
+              <g key={e}>
+                <rect x={x + 8} y={470 - a * sc} width={22} height={a * sc} rx={3} fill={EC[e]} />
+                <rect x={x + 34} y={470 - b * sc} width={22} height={b * sc} rx={3} fill="none" stroke={EC[e]} strokeWidth={2} />
+                <text x={x + 32} y={486} textAnchor="middle" fontFamily={mono} fontSize="10" fill={T.soft}>{f2(a * b)}</text>
+              </g>
+            );
+          })}
+          <text x={BX} y={346} fontFamily={mono} fontSize="10" fill={T.dim} letterSpacing="0.1em">(c_e/S)·m_e  → SUM / E</text>
+        </g>
+      )}
+    </svg>
+  );
+}
