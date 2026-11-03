@@ -63,3 +63,30 @@ export const KIMI_SHAPES = {
   apply: [{ ...KB, io: "in", what: "computed from batch t, used on batch t+1" }, r("load", ["N"], "tokens per expert on the next batch", OUT)],
   race: [{ ...KB, io: "in" }, r("load", ["N"], "tokens per expert", OUT), r("CV", [], "std(load)/mean(load); compare quantile with the ± γ rule", OUT)],
 };
+
+// ---- DeepSeek-V3 node-limited routing + dispatch shuffle --------------------
+import { DEV } from "./devRoute";
+
+export const DEV_GLOSSARY = {
+  E: ["routed experts in this toy", DEV.E],
+  D: ["devices (nodes in V3)", DEV.D],
+  Ed: ["experts per device", DEV.Ed],
+  K: ["routed experts per token", DEV.K],
+  M: ["max devices a token may use", DEV.M],
+  "K/M": ["experts summed into a device score", DEV.K / DEV.M],
+  B: ["tokens in the batch", DEV.B],
+  d: ["hidden size of a token", null],
+  C: ["token copies one device receives", null],
+};
+
+const SD = r("s", ["E"], "affinity of one token for each routed expert (sigmoid scores)");
+export const DEV_SHAPES = {
+  dscore: [{ ...SD, io: "in" }, r("dev_score", ["D"], "per device: sum of the K/M highest affinities among its Ed experts", OUT)],
+  dtop: [r("dev_score", ["D"], "score of each device", IN), r("keep", ["M"], "ids of the M best devices", OUT)],
+  dmask: [{ ...SD, io: "in" }, r("keep", ["M"], "devices allowed for this token", IN), r("s_dev", ["E"], "s with every expert outside the kept devices set to −∞", OUT)],
+  dpick: [r("s_dev", ["E"], "masked affinities", IN), r("idx", ["K"], "the K chosen experts: all live on at most M devices", OUT), r("g", ["K"], "gates s / Σ s over the chosen experts", OUT)],
+  dest: [r("idx", ["B", "K"], "chosen experts of every token", IN), r("dest", ["B", "M"], "devices each token must visit: at most M of them", OUT)],
+  a2a: [r("x", ["B", "d"], "tokens, still on their home devices", IN), r("recv", ["C", "d"], "token copies now sitting on the device that hosts their expert", OUT, "all-to-all")],
+  dffn: [r("recv", ["C", "d"], "copies this device received", IN), r("out", ["C", "d"], "expert outputs for those copies; no communication", OUT)],
+  dcomb: [r("out", ["C", "d"], "outputs on the experts' devices", IN), r("y", ["B", "d"], "back on the home device: Σ g_i · out_i, plus the shared expert and the residual", OUT, "all-to-all")],
+};

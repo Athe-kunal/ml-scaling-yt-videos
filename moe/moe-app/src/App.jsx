@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { T, mono } from "./theme";
+import DenseToMoEView from "./DenseToMoEView";
 import GatingView from "./GatingView";
 import A2AView from "./A2AView";
 import DeepSeekView from "./DeepSeekView";
 import KimiView from "./KimiView";
 
 const VIEWS = [
+  { id: "dense", label: "Dense → MoE", sub: "set sparsity, watch the FFN split into experts", C: DenseToMoEView },
   { id: "gating", label: "MoE layer", sub: "top-2 gating · balance · sharding", C: GatingView },
   { id: "a2a", label: "All-to-all", sub: "the collective behind dispatch / combine", C: A2AView },
   { id: "ds", label: "DeepSeek-V3 balancing", sub: "aux loss → loss-free bias", C: DeepSeekView },
@@ -13,7 +15,7 @@ const VIEWS = [
 ];
 
 export default function App() {
-  const [view, setView] = useState("gating");
+  const [view, setView] = useState("dense");
   const { C } = VIEWS.find((v) => v.id === view);
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: mono }}>

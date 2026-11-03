@@ -2,7 +2,8 @@ import { T, mono } from "./theme";
 import { LB, XC, scoresOf, route, loadsOf, auxTerms, simulate } from "./lbModel";
 import { Bars, Lines, f2 } from "./charts";
 import Stepper from "./Stepper";
-import { DS_GLOSSARY, DS_SHAPES } from "./lbShapes";
+import { DS_GLOSSARY, DS_SHAPES, DEV_GLOSSARY, DEV_SHAPES } from "./lbShapes";
+import { DEV, devOf, devScores, routeDev } from "./devRoute";
 
 // DeepSeek-V3 (arXiv 2412.19437, §2.1.2): sigmoid router, auxiliary balance loss
 // (eq. 17-20, sequence-wise), then auxiliary-loss-free balancing (eq. 16):
@@ -17,6 +18,11 @@ const ZERO = Array(n).fill(0);
 const BIAS_DEMO = SIM[25].b;
 const SNAPS = [1, 3, 6, 12, 25, 50];
 const W = 860, H = 430;
+const DSC = devScores(DEV.SEED);
+const RR = DSC.map((r) => routeDev(r, true));
+const RU = DSC.map((r) => routeDev(r, false));
+const srcDev = (t) => Math.floor(t / (DEV.B / DEV.D));
+const crossOf = (R) => R.reduce((a, r, t) => a + r.devs.filter((d) => d !== srcDev(t)).length, 0);
 
 const BLOCKS = [
   { id: "route", label: "route with sigmoid + top-K", sub: "eq. 13–15", code: ["s   = sigmoid(u @ e.T)            # [T,d]·[d,N] → [T,N]  (eq 15)", "idx = topk(s, K)                   # [T,N] → [T,K]  (eq 14)", "g   = s[idx] / s[idx].sum()        # [T,K]  (eq 13)"] },
@@ -25,6 +31,16 @@ const BLOCKS = [
   { id: "monitor", label: "monitor expert load", sub: "whole batch, every step", code: ["load = onehot(idx).sum(0)          # [T,K,N] → [N]  tokens per expert"] },
   { id: "update", label: "bias update", sub: "± γ", code: ["err = load.mean() - load         # [N]", "b  += gamma * sign(err)           # [N]  overloaded ↓, underloaded ↑"] },
   { id: "loop", label: "repeat each training step", sub: "balance emerges", loop: true, code: ["for step in training:", "    idx  = topk(s + b, K)", "    load = count(idx)", "    b   += gamma * sign(load.mean() - load)"] },
+  { id: "devroute", label: "device-limited routing", sub: "≤ M devices per token · §2.1.2", code: [
+    "dev_score = topk(s.view(D, E // D), K // M).sum(-1)   # [E] → [D, E/D] → [D]",
+    "keep = topk(dev_score, M).indices   # [D] → [M] devices",
+    "s_dev = s.masked_fill(~on(keep), -inf)   # [E]: experts elsewhere cannot win",
+    "idx = topk(s_dev, K).indices   # [E] → [K], all on ≤ M devices"] },
+  { id: "shuffle", label: "router shuffle: all-to-all", sub: "dispatch → experts → combine · §3.2.2", code: [
+    "dest = device_of(idx)   # [B, K] expert ids → device ids",
+    "recv = all_to_all(x, dest)   # a copy of each token goes to every device it needs",
+    "out = experts(recv)   # runs locally, no network",
+    "y = all_to_all(out) · g   # copies return and are weighted by g"] },
   { id: "recipe", label: "V3 recipe", sub: "bias + tiny α loss" , code: ["loss = lm_loss + alpha * L_bal   # alpha extremely small", "# bias does the batch-level balancing"] },
 ];
 
@@ -41,6 +57,14 @@ const STEPS = [
   { id: "err", block: "update", lines: [0], scene: "update", stage: 0, caption: "error: how far each expert is from the mean load", vars: () => [["γ", `${GAMMA}`]] },
   { id: "update", block: "update", lines: [1], scene: "update", stage: 1, caption: "overloaded: b − γ · underloaded: b + γ", vars: () => [["γ", `${GAMMA}`], ["paper γ", "0.001"]] },
   ...SNAPS.map((t) => ({ id: `t${t}`, block: "loop", lines: [1, 2, 3], visAt: 2, scene: "loop", t, caption: `after ${t} training step${t > 1 ? "s" : ""}: load flattens`, vars: () => [["step", `${t}`], ["load CV", SIM[t].cv.toFixed(2)]] })),
+  { id: "dscore", block: "devroute", lines: [0], scene: "devroute", stage: 0, caption: "device score = sum of the top K/M affinities of its experts", vars: () => [["K", `${DEV.K}`], ["M", `${DEV.M}`], ["K/M", `${DEV.K / DEV.M}`]] },
+  { id: "dtop", block: "devroute", lines: [1], scene: "devroute", stage: 1, caption: "keep only the M best devices", vars: () => [["keep", RR[0].keep.map((d) => `D${d}`).join(" ")]] },
+  { id: "dmask", block: "devroute", lines: [2], scene: "devroute", stage: 2, caption: "experts on the other devices are masked out", vars: () => [["eligible", `${RR[0].eligible.length} of ${DEV.E}`]] },
+  { id: "dpick", block: "devroute", lines: [3], scene: "devroute", stage: 3, caption: "top-K among the rest: at most M devices are touched", vars: () => [["devices", `${RR[0].devs.length}`], ["unrestricted", `${RU[0].devs.length}`, RU[0].devs.length > RR[0].devs.length ? "bad" : null]] },
+  { id: "dest", block: "shuffle", lines: [0], scene: "shuffle", stage: 0, caption: "every token knows which devices host its experts", vars: () => [["tokens", `${DEV.B}`], ["devices", `${DEV.D}`]] },
+  { id: "a2a", block: "shuffle", lines: [1], scene: "shuffle", stage: 1, caption: "all-to-all: token copies fly to their devices (IB, then NVLink)", vars: () => [["network copies", `${crossOf(RR)}`], ["without limit", `${crossOf(RU)}`, "bad"]] },
+  { id: "dffn", block: "shuffle", lines: [2], scene: "shuffle", stage: 2, caption: "each expert runs on the copies it received", vars: () => [["copies", `${RR.reduce((a, r) => a + r.devs.length, 0)}`]] },
+  { id: "dcomb", block: "shuffle", lines: [3], scene: "shuffle", stage: 3, caption: "outputs travel back and are weighted by the gates g", vars: () => [["dropped tokens", "0"]] },
   { id: "recipe", block: "recipe", lines: [0, 1], visAt: 0, scene: "recipe", caption: "bias balances batches, tiny loss guards each sequence", vars: () => [["tokens dropped", "0"]] },
 ];
 
@@ -178,6 +202,106 @@ function Scene({ step }) {
         <text x={20} y={334} fontFamily={mono} fontSize="11" fill={T.dim}>γ = {GAMMA} here; the paper uses 0.001 over many more steps</text>
       </g>
     );
+  } else if (step.scene === "devroute") {
+    const st = step.stage, rr = RR[0], ru = RU[0], row = DSC[0];
+    const DX = (d) => 20 + d * 210, bx = (e) => DX(devOf(e)) + 22 + (e % DEV.Ed) * 52, BASE = 232, SC = 130;
+    const keepSet = new Set(rr.keep), feeds = new Set(rr.top.flat()), chosen = new Set(rr.idx), ghost = new Set(ru.idx);
+    body = (
+      <g>
+        <text x={20} y={34} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim}>TOKEN x0 · AFFINITY s OF {DEV.E} EXPERTS ON {DEV.D} DEVICES · K = {DEV.K}, M = {DEV.M}</text>
+        {Array.from({ length: DEV.D }, (_, d) => {
+          const kept = keepSet.has(d), out = st >= 1 && !kept;
+          return (
+            <g key={d} opacity={out ? 0.35 : 1} style={{ transition: "opacity .5s" }}>
+              <rect x={DX(d)} y={50} width={190} height={226} rx={10} fill={T.panel} stroke={st >= 1 && kept ? T.accent : T.rule} strokeWidth={st >= 1 && kept ? 2.2 : 1.2} />
+              <text x={DX(d) + 12} y={72} fontFamily={mono} fontSize="12.5" fontWeight="700" fill={T.ink}>Device {d}</text>
+              <text x={DX(d) + 178} y={72} textAnchor="end" fontFamily={mono} fontSize="11.5" fontWeight="700" fill={st >= 1 ? (kept ? T.accent : T.bad) : T.wire}>
+                {st === 0 ? `Σ = ${f2(rr.devScore[d])}` : kept ? `Σ ${f2(rr.devScore[d])} ✓` : `Σ ${f2(rr.devScore[d])} ✕`}
+              </text>
+            </g>
+          );
+        })}
+        {row.map((v, e) => {
+          const d = devOf(e), h = v * SC, x = bx(e);
+          const masked = st >= 2 && !keepSet.has(d);
+          const lit = st === 0 ? feeds.has(e) : st >= 3 ? chosen.has(e) : !masked;
+          return (
+            <g key={e} opacity={masked ? (st >= 3 && ghost.has(e) ? 0.55 : 0.2) : 1} style={{ transition: "opacity .5s" }}>
+              <rect x={x} y={BASE - h} width={40} height={h} rx={4} fill={XC[d]} opacity={lit ? 0.95 : 0.32} stroke={st === 0 && feeds.has(e) ? T.ink : "none"} strokeWidth={1.6} />
+              <text x={x + 20} y={BASE - h - 5} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={T.soft}>{f2(v)}</text>
+              <text x={x + 20} y={BASE + 14} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={XC[d]}>E{e}</text>
+              {st >= 3 && chosen.has(e) && <text x={x + 20} y={BASE + 30} textAnchor="middle" fontFamily={mono} fontSize="10" fill={T.accent}>✓ g {f2(rr.g[rr.idx.indexOf(e)])}</text>}
+              {st >= 3 && ghost.has(e) && !chosen.has(e) && <text x={x + 20} y={BASE - h - 17} textAnchor="middle" fontFamily={mono} fontSize="10" fill={T.bad}>▽</text>}
+              {masked && <text x={x + 20} y={BASE - h / 2} textAnchor="middle" fontFamily={mono} fontSize="16" fill={T.bad}>×</text>}
+            </g>
+          );
+        })}
+        <g fontFamily={mono} fontSize="11.5" fill={T.soft}>
+          {st === 0 && <text x={20} y={316}>white outline = the K/M = {DEV.K / DEV.M} best experts of each device: they make its score</text>}
+          {st === 1 && <text x={20} y={316}>keep the M = {DEV.M} highest device scores: this bounds the tokens' network fan-out</text>}
+          {st === 2 && <text x={20} y={316}>an expert on a dropped device can no longer be picked, however high its own score</text>}
+          {st >= 3 && <text x={20} y={316}>chosen: E{rr.idx.join(", E")} on {rr.devs.length} device{rr.devs.length > 1 ? "s" : ""}</text>}
+          {st >= 3 && <text x={20} y={340} fill={T.bad}>▽ = would be picked without the limit: E{ru.idx.join(", E")} on {ru.devs.length} devices</text>}
+          {st >= 3 && <text x={20} y={364} fill={T.dim}>V3: at most 4 nodes per token; ~3.2 experts per node, so up to 13 routed experts cost the same traffic (§3.2.2)</text>}
+        </g>
+      </g>
+    );
+  } else if (step.scene === "shuffle") {
+    const st = step.stage, per = DEV.B / DEV.D;
+    const DX = (d) => 20 + d * 210, CX = (t) => DX(srcDev(t)) + 50 + (t % per) * 90, SY = 80, DY = 292;
+    const endX = (t, d) => DX(d) + 24 + ((t * 37) % 142);
+    const recv = Array(DEV.D).fill(0), expAt = Array(DEV.E).fill(0);
+    RR.forEach((r) => { r.devs.forEach((d) => (recv[d] += 1)); r.idx.forEach((e) => (expAt[e] += 1)); });
+    body = (
+      <g>
+        {Array.from({ length: DEV.D }, (_, d) => (
+          <g key={`s${d}`}>
+            <rect x={DX(d)} y={26} width={190} height={78} rx={10} fill={T.panel} stroke={T.rule} />
+            <text x={DX(d) + 10} y={42} fontFamily={mono} fontSize="10" fill={T.dim}>device {d} · tokens</text>
+          </g>
+        ))}
+        {Array.from({ length: DEV.D }, (_, d) => (
+          <g key={`d${d}`}>
+            <rect x={DX(d)} y={DY} width={190} height={92} rx={10} fill={T.panel} stroke={st >= 2 ? T.accent : T.rule} style={{ transition: "stroke .4s" }} />
+            <text x={DX(d) + 10} y={DY + 15} fontFamily={mono} fontSize="10" fill={T.dim}>device {d} · experts</text>
+            {st >= 1 && <text x={DX(d) + 180} y={DY + 15} textAnchor="end" fontFamily={mono} fontSize="10.5" fontWeight="700" fill={T.wire}>recv {recv[d]}</text>}
+            {Array.from({ length: DEV.Ed }, (_, j) => {
+              const e = d * DEV.Ed + j;
+              return (
+                <g key={e}>
+                  <rect x={DX(d) + 10 + j * 59} y={DY + 30} width={52} height={50} rx={6} fill={XC[d]} opacity={st >= 2 ? (expAt[e] ? 0.9 : 0.2) : 0.3} style={{ transition: "opacity .5s" }} />
+                  <text x={DX(d) + 36 + j * 59} y={DY + 52} textAnchor="middle" fontFamily={mono} fontSize="11" fontWeight="700" fill={T.bg}>E{e}</text>
+                  {st >= 2 && <text x={DX(d) + 36 + j * 59} y={DY + 68} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={T.bg}>{expAt[e]} tok</text>}
+                </g>
+              );
+            })}
+          </g>
+        ))}
+        {DSC.map((_, t) => (
+          <g key={`t${t}`}>
+            <circle cx={CX(t)} cy={SY} r={15} fill={XC[t % 8]} />
+            <text x={CX(t)} y={SY + 4} textAnchor="middle" fontFamily={mono} fontSize="11" fontWeight="700" fill={T.bg}>x{t}</text>
+            {st === 0 && <text x={CX(t)} y={SY + 30} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={T.soft}>→ D{RR[t].devs.join(" D")}</text>}
+          </g>
+        ))}
+        {st >= 1 && st !== 2 && DSC.map((_, t) => (
+          <g key={`l${t}`}>
+            {RU[t].devs.filter((d) => !RR[t].devs.includes(d)).map((d) => (
+              <path key={`g${d}`} d={`M${CX(t)},${SY + 16} C${CX(t)},190 ${endX(t, d)},190 ${endX(t, d)},${DY}`} fill="none" stroke={T.bad} strokeWidth={1.1} strokeDasharray="3 4" opacity={st === 1 ? 0.45 : 0} />
+            ))}
+            {RR[t].devs.map((d) => {
+              const local = d === srcDev(t);
+              const dd = st >= 3 ? `M${endX(t, d)},${DY} C${endX(t, d)},190 ${CX(t)},190 ${CX(t)},${SY + 16}` : `M${CX(t)},${SY + 16} C${CX(t)},190 ${endX(t, d)},190 ${endX(t, d)},${DY}`;
+              return <path key={d} d={dd} fill="none" stroke={st >= 3 ? T.accent2 : XC[t % 8]} strokeWidth={local ? 1.2 : 1.8} strokeDasharray={local ? "2 4" : undefined} opacity={local ? 0.4 : 0.75} className={local ? undefined : st >= 3 ? "lane back" : "lane"} />;
+            })}
+          </g>
+        ))}
+        <g fontFamily={mono} fontSize="11.5">
+          <text x={20} y={H - 26} fill={T.soft}>cross-device copies: <tspan fill={T.accent} fontWeight="700">{crossOf(RR)}</tspan> with the M = {DEV.M} limit · <tspan fill={T.bad} fontWeight="700">{crossOf(RU)}</tspan> without it</text>
+          {st >= 1 && <text x={20} y={H - 8} fontSize="10.5" fill={T.dim}>dotted = stays on its own device · red dashes = traffic the limit saves</text>}
+        </g>
+      </g>
+    );
   } else {
     const card = (x, y, c, a, b, d) => (
       <g>
@@ -206,8 +330,8 @@ export default function DeepSeekView() {
       blocks={BLOCKS}
       steps={STEPS}
       scene={(step) => <Scene step={step} />}
-      glossary={DS_GLOSSARY}
-      shapes={(step) => DS_SHAPES[step.block === "loop" ? "loop" : step.sid]}
+      glossary={(step) => (step.block === "devroute" || step.block === "shuffle" ? DEV_GLOSSARY : DS_GLOSSARY)}
+      shapes={(step) => (step.block === "devroute" || step.block === "shuffle" ? DEV_SHAPES : DS_SHAPES)[step.block === "loop" ? "loop" : step.sid]}
       legend={<span>source: DeepSeek-V3 Technical Report, §2.1.2 (eq. 12–20) · <span style={{ color: T.wire }}>dashed</span> = balanced level</span>}
     />
   );

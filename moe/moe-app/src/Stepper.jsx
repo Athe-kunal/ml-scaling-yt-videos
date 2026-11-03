@@ -160,7 +160,7 @@ export default function Stepper({ title, subtitle, blocks, steps, flat, scene, h
         <Panel title={title} blocks={blocks} item={item} />
         <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
           <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: 12 }}>{scene(item, idx)}</div>
-          {shapes && <ShapeCard rows={shapes(item)} glossary={glossary} />}
+          {shapes && <ShapeCard rows={shapes(item)} glossary={typeof glossary === "function" ? glossary(item) : glossary} />}
           <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: "12px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <button onClick={prevStep} disabled={idx === 0} title="previous step (⇧←)" style={{ ...btn(false, idx === 0), padding: "0 10px" }}>⏮</button>
             <button onClick={() => setIdx(Math.max(idx - 1, 0))} disabled={idx === 0} style={btn(false, idx === 0)}>◀ prev line</button>
