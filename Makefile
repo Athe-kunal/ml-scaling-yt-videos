@@ -46,3 +46,13 @@ inference-install:
 
 inference:
 	cd $(INFERENCE_DIR) && npm run dev -- --port $(INFERENCE_PORT)
+
+.PHONY: moe moe-install
+MOE_DIR := moe/moe-app
+MOE_PORT ?= 5182
+
+moe-install:
+	cd $(MOE_DIR) && npm install
+
+moe:
+	cd $(MOE_DIR) && npm run dev -- --port $(MOE_PORT)
