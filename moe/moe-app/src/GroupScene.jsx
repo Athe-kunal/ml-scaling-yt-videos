@@ -110,7 +110,7 @@ export default function GroupScene({ gm, stage, loop }) {
               <text x={INFOX} y={y + 4} fontFamily={mono} fontSize="10.5" fill={lp && !done(k, 6) ? T.wire : k.t2.capOk ? (k.t2.diceOk ? T.accent : T.bad) : T.bad}>
                 {lp && !done(k, 6)
                   ? `rnd = ${f2(k.rnd)}${lp.ph >= 5 ? `  c = ${k.t2.pos}` : ""}`
-                  : k.t2.capOk ? `${f2(k.rnd)} < ${f2(2 * k.g2n)} ${k.t2.diceOk ? "✓" : "✕"}` : "buffer full ✕"}
+                  : k.t2.capOk ? `${f2(k.rnd)} ${k.t2.diceOk ? "<" : "≥"} ${f2(2 * k.g2n)} ${k.t2.diceOk ? "✓" : "✕"}` : "buffer full ✕"}
               </text>
             )}
             {stage === 3 && lp && k.s === lp.cur && lp.ph >= 4 && (

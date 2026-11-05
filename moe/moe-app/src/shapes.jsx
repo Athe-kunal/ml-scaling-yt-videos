@@ -8,7 +8,7 @@ import { T, mono } from "./theme";
 const DIM_COL = {
   G: "#6EF3DD", S: "#FFC94D", E: "#FF8AC6", C: "#9BE564", M: "#8DB4FF", H: "#C79BFF",
   T: "#FFC94D", N: "#FF8AC6", K: "#9BE564", d: "#8DB4FF", B: "#FFC94D", R: "#6EF3DD", L: "#C79BFF",
-  Dsrc: "#6EF3DD", Ddst: "#FF8AC6", He: "#C79BFF", n: "#FFC94D", s: "#FF8AC6", k: "#9BE564", "s+k": "#9BE564",
+  Dsrc: "#6EF3DD", Ddst: "#FF8AC6", Ed: "#FFB86B", He: "#C79BFF", n: "#FFC94D", s: "#FF8AC6", k: "#9BE564", "s+k": "#9BE564",
 };
 const dimCol = (s) => DIM_COL[s] ?? T.soft;
 

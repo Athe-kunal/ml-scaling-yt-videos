@@ -3,6 +3,7 @@ import { T, mono, btn } from "./theme";
 import { LB, XC, scoresOf, route, loadsOf, cvOf, qbStep, simulate } from "./lbModel";
 import { Bars, Lines, f2, div } from "./charts";
 import Stepper from "./Stepper";
+import { Tex } from "./tex";
 import { KIMI_GLOSSARY, KIMI_SHAPES } from "./lbShapes";
 
 // Kimi K3 Quantile Balancing (arXiv 2607.24653, §2.3.3). Instead of nudging b_j by a
@@ -30,14 +31,31 @@ const W = 860, H = 430;
 const firstBelow = (rec, thr) => rec.findIndex((r) => r.cv < thr);
 
 const BLOCKS = [
-  { id: "limit", label: "why not ± γ?", sub: "fixed step: slow or jittery", code: ["b += gamma * sign(load.mean() - load)   # [N]", "# small gamma: slow   large gamma: oscillates"] },
-  { id: "cutoff", label: "top-(k+1) cutoff", sub: "α_i per token", code: ["vals = topk(s + b, k + 1)       # [B,N] → [B,k+1]", "alpha = vals[:, k]            # [B]  (k+1)-th score"] },
-  { id: "margin", label: "routing margin", sub: "s_ij − α_i", code: ["margin = s - alpha[:, None]   # [B,N] − [B,1] → [B,N]"] },
-  { id: "quantile", label: "per-expert quantile", sub: "choose b so k/n of tokens pass", code: ["q     = 1 - k / n              # scalar", "b_hat = -quantile(margin, q, dim=0)   # [B,N] → [N]"] },
-  { id: "center", label: "mean-centre", sub: "selection unchanged", code: ["b = b_hat - b_hat.mean()   # [N]"] },
-  { id: "allreduce", label: "histogram + all-reduce", sub: "scales to ~1000 experts", code: ["hist = histogram(margin, bins)    # [B,N] → [N,L] per rank", "all_reduce(hist)                   # [N,L] summed over R ranks", "b_hat = -quantile_from(hist, q)   # [N,L] → [N]"] },
-  { id: "apply", label: "use next step", sub: "bias applies to the next batch", code: ["# batch t is routed with b from batch t-1", "idx = topk(s + b, k)               # [B,N] + [N] → [B,k]"] },
-  { id: "race", label: "training loop", sub: "sign rule vs quantile", loop: true, code: ["for batch in data:", "    route(batch, b)                 # [B,N] → idx [B,k]", "    b = quantile_balance(batch, b)  # [N]", "# bias frozen at inference"] },
+  { id: "limit", label: "why not ± γ?", sub: "fixed step: slow or jittery", code: [
+    "b += gamma * sign(load.mean() - load)   # load [N] → mean over N → scalar; b [N] · gamma = fixed step size",
+    "# small gamma: slow   large gamma: oscillates"] },
+  { id: "cutoff", label: "top-(k+1) cutoff", sub: "α_i per token", code: [
+    "vals = topk(s + b, k + 1)   # s [B,N] + b [N] → [B,N] → top k+1 over N → [B,k+1] · B tokens, N experts, b[i] = bias of expert i",
+    "alpha = vals[:, k]   # [B,k+1] → [B] · alpha[t] = token t's (k+1)-th best score = its cutoff"] },
+  { id: "margin", label: "routing margin", sub: "s_ij − α_i", code: [
+    "margin = s - alpha[:, None]   # [B,N] − [B,1] → [B,N] · margin[t,i] = how far expert i is above token t's cutoff"] },
+  { id: "quantile", label: "per-expert quantile", sub: "choose b so k/n of tokens pass", code: [
+    "q     = 1 - k / n   # scalar · share of tokens that must stay below the threshold",
+    "b_hat = -quantile(margin, q, dim=0)   # [B,N] → quantile over B → [N] · b_hat[i] = bias that gives expert i k/N of the tokens"] },
+  { id: "center", label: "mean-centre", sub: "selection unchanged", code: [
+    "b = b_hat - b_hat.mean()   # [N] − (mean over N → scalar) → [N] · same shift for every expert, so rankings do not change"] },
+  { id: "allreduce", label: "histogram + all-reduce", sub: "scales to ~1000 experts", code: [
+    "hist = histogram(margin, bins)   # [B,N] → count over B per bin → [N,L] on each rank · L bins, each rank holds B/R tokens",
+    "all_reduce(hist)   # sum over R ranks → [N,L], identical on every rank",
+    "b_hat = -quantile_from(hist, q)   # [N,L] → find the q point per expert → [N]"] },
+  { id: "apply", label: "use next step", sub: "bias applies to the next batch", code: [
+    "# batch t is routed with b from batch t-1",
+    "idx = topk(s + b, k)   # [B,N] + [N] → top-k over N → [B,k] · idx[t] = token t's k expert ids"] },
+  { id: "race", label: "training loop", sub: "sign rule vs quantile", loop: true, code: [
+    "for batch in data:   # one batch per step",
+    "    route(batch, b)   # [B,N] → idx [B,k]",
+    "    b = quantile_balance(batch, b)   # [N]",
+    "# bias frozen at inference"] },
 ];
 
 const STEPS = [
@@ -47,7 +65,7 @@ const STEPS = [
   { id: "margin", block: "margin", lines: [0], scene: "margin", pick: "tok", caption: "margin = how far each expert is above that cutoff", vars: () => [["margin", "s_ij − α_i"]] },
   { id: "q", block: "quantile", lines: [0], scene: "quantile", stage: 0, pick: "ex", caption: "we want k/n of the tokens to clear the cutoff", vars: () => [["target", `k/n = ${(k / n).toFixed(2)}`], ["quantile", `${(1 - k / n).toFixed(2)}`], ["K3", "1 − 16/896 ≈ 0.982"]] },
   { id: "quantile", block: "quantile", lines: [1], scene: "quantile", stage: 1, pick: "ex", caption: "slide b until exactly k/n of tokens pass the cutoff", vars: () => [["target", `k/n = ${(k / n).toFixed(2)}`], ["quantile", `${(1 - k / n).toFixed(2)}`]] },
-  { id: "center", block: "center", lines: [0], scene: "center", caption: "subtract the mean: routing unchanged, bias stays small", vars: () => [["mean b̂", QB0.bhat.reduce((a, x) => a + x, 0) / n < 1e-9 ? "0" : (QB0.bhat.reduce((a, x) => a + x, 0) / n).toFixed(3)]] },
+  { id: "center", block: "center", lines: [0], scene: "center", pick: "ex", caption: "subtract the mean: routing unchanged, bias stays small", vars: () => [["mean b̂", Math.abs(QB0.bhat.reduce((a, x) => a + x, 0) / n) < 1e-9 ? "0" : (QB0.bhat.reduce((a, x) => a + x, 0) / n).toFixed(3)]] },
   { id: "hist", block: "allreduce", lines: [0], scene: "allreduce", stage: 0, pick: "ex", caption: "each rank bins its own margins", vars: () => [["ranks", `${ranks}`], ["bins / expert", `${NB} here · few hundred in K3`]] },
   { id: "reduce", block: "allreduce", lines: [1], scene: "allreduce", stage: 1, pick: "ex", caption: "all-reduce: ranks add bin counts into one histogram", vars: () => [["ranks", `${ranks}`], ["traffic", "bins × experts"]] },
   { id: "bhat", block: "allreduce", lines: [2], scene: "allreduce", stage: 2, pick: "ex", caption: "read the quantile off the pooled histogram", vars: () => [["same as", "sorting all tokens"]] },
@@ -65,7 +83,7 @@ const hist = (vals, lo, hi) => {
 };
 
 // histogram bars with a threshold line; bins right of the line are coloured
-function Hist({ x, y, w, h, counts, lo, hi, thr, color, title, maxC }) {
+function Hist({ x, y, w, h, counts, lo, hi, thr, color, title, maxC, hlBin }) {
   const bw = w / NB;
   const mx = maxC ?? Math.max(...counts, 1);
   const tx = thr == null ? null : x + ((thr - lo) / (hi - lo)) * w;
@@ -78,14 +96,17 @@ function Hist({ x, y, w, h, counts, lo, hi, thr, color, title, maxC }) {
         const bx = lo + ((i + 0.5) / NB) * (hi - lo);
         return <rect key={i} x={x + i * bw + 1.5} y={y + h - (c / mx) * h} width={bw - 3} height={(c / mx) * h} rx={2} fill={thr == null || bx > thr ? color : T.rule} />;
       })}
+      {hlBin != null && <rect x={x + hlBin * bw} y={y} width={bw} height={h} fill="none" stroke={T.ink} strokeWidth={2} rx={2} />}
       <line x1={zx} x2={zx} y1={y} y2={y + h} stroke={T.dim} strokeDasharray="2 3" />
       {tx != null && <line x1={tx} x2={tx} y1={y - 4} y2={y + h} stroke={T.wire} strokeWidth={2} />}
     </g>
   );
 }
 
-function Scene({ step, tok, ex }) {
+function Scene({ step, tok, ex, setEx }) {
   let body = null;
+  const d2 = (v) => v.toFixed(2);
+  const c = (x, j) => `{\\color{${XC[j]}}\\mathbf{${x}}}`; // a number to point at, coloured like its expert
   const col = (j) => B0.map((_, i) => QB0.margins[i][j]);
 
   if (step.scene === "limit") {
@@ -94,7 +115,8 @@ function Scene({ step, tok, ex }) {
       <g>
         <Lines x={30} y={70} w={380} h={200} series={[{ pts: r(SLOW), color: T.accent, label: "γ small: slow" }]} ymax={4} ref1={1} title="EXPERT 0 LOAD / FAIR SHARE" />
         <Lines x={450} y={70} w={380} h={200} series={[{ pts: r(FAST), color: T.bad, label: "γ large: oscillates" }]} ymax={4} ref1={1} title="EXPERT 0 LOAD / FAIR SHARE" />
-        <text x={30} y={320} fontFamily={mono} fontSize="13" fontWeight="700" fill={T.accent2}>b_j += γ · sign(mean − load_j)</text>
+        <Tex x={30} y={296} w={500} h={30} size={15} color={T.accent2} tex={`b_j\\leftarrow b_j+\\gamma\\,\\mathrm{sign}(\\bar\\ell-\\ell_j)`} />
+        <Tex x={330} y={298} w={520} h={26} size={11.5} color={T.dim} tex={`\\bar\\ell=\\text{mean load},\\;\\ell_j=\\text{load of expert }j,\\;\\gamma=\\text{fixed step}`} />
         <text x={30} y={344} fontFamily={mono} fontSize="11" fill={T.dim}>one step size for every expert and every imbalance; K3 has 896 experts and k = 16</text>
         <text x={30} y={364} fontFamily={mono} fontSize="11" fill={T.dim}>yellow dashed = fair share · x axis: training step 0–60</text>
       </g>
@@ -108,6 +130,9 @@ function Scene({ step, tok, ex }) {
           x={40} y={80} w={520} h={230} values={B0[tok]} max={1} ideal={step.stage >= 1 ? r.cutoff : undefined} idealLabel="α" fmt={f2}
           title={`TOKEN x${tok} · SCORE s + b  (b = 0 for now)`} dim={B0[tok].map((_, j) => j).filter((j) => !r.sel.includes(j) && j !== cut[k])} flag={step.stage >= 1 ? [cut[k]] : []}
         />
+        <Tex x={40} y={340} w={800} h={32} size={14} color={T.ink} tex={step.stage === 0
+          ? `\\mathrm{TopK}(s_{x_{${tok}}}+b,\\,k{+}1)=\\{${cut.slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${c(d2(B0[tok][j]), j)}`).join(",\\;")}\\}`
+          : `\\alpha_{x_{${tok}}}=(k{+}1)\\text{-th largest}=\\mathrm{E}_{${cut[k]}}\\!:\\,${c(d2(B0[tok][cut[k]]), cut[k])}`} />
         <g fontFamily={mono} fontSize="11.5" fill={T.soft}>
           <text x={600} y={120}>top-{k}: routed</text>
           {step.stage >= 1 && <text x={600} y={142} fill={T.bad}>(k+1)-th, red ring:</text>}
@@ -133,7 +158,8 @@ function Scene({ step, tok, ex }) {
         ))}
         <text x={x0} y={y0 + rows * ch + 20} fontFamily={mono} fontSize="10" fill={T.dim}>warm = above the cutoff · cool = below</text>
         <Bars x={470} y={90} w={370} h={200} values={QB0.margins[tok]} fmt={f2} title={`TOKEN x${tok} · MARGIN s − α`} labels={XC.map((_, j) => `E${j}`)} />
-        <text x={470} y={350} fontFamily={mono} fontSize="11" fill={T.dim}>routed experts &gt; 0 · the (k+1)-th is exactly 0</text>
+        <Tex x={470} y={318} w={390} h={30} size={12.5} color={T.ink} tex={order(B0[tok]).slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(B0[tok][j])}-${d2(RT0[tok].cutoff)}=${c(d2(QB0.margins[tok][j]), j)}`).join("\\;\\;")} />
+        <text x={470} y={366} fontFamily={mono} fontSize="11" fill={T.dim}>routed experts &gt; 0 · the (k+1)-th is exactly 0</text>
       </g>
     );
   } else if (step.scene === "quantile") {
@@ -144,15 +170,18 @@ function Scene({ step, tok, ex }) {
     body = (
       <g>
         <Hist x={40} y={80} w={520} h={220} counts={hist(v, lo, hi)} lo={lo} hi={hi} thr={thr} color={XC[ex]} title={`EXPERT E${ex} · MARGINS OF ALL ${m} TOKENS`} />
-        <g fontFamily={mono} fontSize="11.5" fill={T.soft}>
-          {thr == null ? <text x={40} y={330}>q = 1 − k/n = {(1 - k / n).toFixed(2)}: the cut must leave k/n = {(k / n).toFixed(2)} of the tokens on its right</text> : (
-            <g>
-              <text x={40} y={330}>yellow line = the (1 − k/n) quantile = {f2(thr)}</text>
-              <text x={40} y={352} fill={XC[ex]}>{above} of {m} tokens lie right of it = k/n of the batch = target load {MU}</text>
-              <text x={40} y={376} fontWeight="700" fill={T.accent2}>b̂_{ex} = −(quantile) = {f2(-thr)}</text>
-            </g>
-          )}
-        </g>
+        {thr == null ? (
+          <g>
+            <Tex x={40} y={312} w={500} h={42} size={15} color={T.ink} tex={`q=1-\\dfrac{k}{N}=1-\\dfrac{${k}}{${n}}=${c(d2(1 - k / n), ex)}`} />
+            <Tex x={40} y={362} w={700} h={26} size={11.5} color={T.dim} tex={`\\text{the threshold must leave }k/N=${d2(k / n)}\\text{ of the ${m} tokens on its right}`} />
+          </g>
+        ) : (
+          <g>
+            <Tex x={40} y={308} w={520} h={30} size={14} color={T.ink} tex={`\\mathrm{quantile}_{q=${d2(1 - k / n)}}(\\mathrm{margin}_{:,\\mathrm{E}_{${ex}}})=${c(d2(thr), ex)}`} />
+            <Tex x={40} y={342} w={520} h={44} size={14} color={T.ink} tex={`\\dfrac{${c(above, ex)}}{${m}}=${d2(above / m)}\\approx\\dfrac{k}{N}=\\dfrac{${k}}{${n}}\\;\\Rightarrow\\;\\text{load}\\approx${MU}`} />
+            <Tex x={40} y={390} w={520} h={30} size={15} color={T.accent2} tex={`\\hat b_{\\mathrm{E}_{${ex}}}=-\\mathrm{quantile}=-(${d2(thr)})=${c(d2(-thr), ex)}`} />
+          </g>
+        )}
         {thr != null && <Bars x={610} y={90} w={230} h={170} values={QB0.bhat} fmt={f2} title="b̂ FOR ALL EXPERTS" dim={XC.map((_, j) => j).filter((j) => j !== ex)} />}
       </g>
     );
@@ -160,10 +189,10 @@ function Scene({ step, tok, ex }) {
     const mu = QB0.bhat.reduce((a, x) => a + x, 0) / n;
     body = (
       <g>
-        <Bars x={30} y={80} w={380} h={210} values={QB0.bhat} fmt={f2} title="b̂ (RAW)" />
-        <Bars x={450} y={80} w={380} h={210} values={QB0.b} fmt={f2} title="b = b̂ − mean(b̂)" />
-        <text x={30} y={340} fontFamily={mono} fontSize="12" fill={T.soft}>adding the same number to every expert never changes a top-k ranking</text>
-        <text x={30} y={362} fontFamily={mono} fontSize="11" fill={T.dim}>mean removed: {f2(mu)} · old bias only enters through the cutoffs α</text>
+        <Bars x={30} y={80} w={380} h={210} values={QB0.bhat} fmt={f2} title="b̂ (RAW)" hl={ex} onPick={setEx} />
+        <Bars x={450} y={80} w={380} h={210} values={QB0.b} fmt={f2} title="b = b̂ − mean(b̂)" hl={ex} onPick={setEx} />
+        <Tex x={30} y={318} w={800} h={44} size={14} color={T.ink} tex={`b_{\\mathrm{E}_{${ex}}}=\\hat b_{\\mathrm{E}_{${ex}}}-\\dfrac{1}{N}\\sum_{i}\\hat b_i=${c(d2(QB0.bhat[ex]), ex)}-(${d2(mu)})=${c(d2(QB0.b[ex]), ex)}`} />
+        <text x={30} y={384} fontFamily={mono} fontSize="12" fill={T.soft}>adding the same number to every expert never changes a top-k ranking</text>
       </g>
     );
   } else if (step.scene === "allreduce") {
@@ -174,15 +203,19 @@ function Scene({ step, tok, ex }) {
     const pooled = locals[0].map((_, i) => locals.reduce((a, h) => a + h[i], 0));
     const thr = QB0.thr[ex];
     const mx = Math.max(...locals.flat(), 1);
+    const bi = Math.min(NB - 1, Math.max(0, Math.floor(((thr - lo) / (hi - lo)) * NB))); // the bin holding the threshold
     body = (
       <g>
         {locals.map((c, r) => (
-          <Hist key={r} x={20 + r * 210} y={70} w={190} h={80} counts={c} lo={lo} hi={hi} thr={step.stage >= 2 ? thr : null} color={XC[ex]} maxC={mx} title={`RANK ${r} · ${per} TOKENS`} />
+          <Hist key={r} x={20 + r * 210} y={70} w={190} h={80} counts={c} lo={lo} hi={hi} thr={step.stage >= 2 ? thr : null} color={XC[ex]} maxC={mx} hlBin={bi} title={`RANK ${r} · ${per} TOKENS`} />
         ))}
         {step.stage >= 1 && <text x={W / 2} y={188} textAnchor="middle" fontFamily={mono} fontSize="13" fontWeight="700" fill={T.wire}>↓ all-reduce: add the bin counts ↓</text>}
-        {step.stage >= 1 && <Hist x={230} y={210} w={400} h={110} counts={pooled} lo={lo} hi={hi} thr={step.stage >= 2 ? thr : null} color={XC[ex]} title={`POOLED · EXPERT E${ex}`} />}
-        {step.stage >= 2 && <text x={20} y={360} fontFamily={mono} fontSize="11.5" fill={T.soft}>same quantile as sorting all {m} margins, up to bin width</text>}
-        {step.stage >= 1 && <text x={20} y={382} fontFamily={mono} fontSize="11" fill={T.dim}>traffic = bins × experts, whatever the number of tokens or ranks</text>}
+        {step.stage >= 1 && <Hist x={230} y={210} w={400} h={110} counts={pooled} lo={lo} hi={hi} thr={step.stage >= 2 ? thr : null} color={XC[ex]} hlBin={bi} title={`POOLED · EXPERT E${ex}`} />}
+        {step.stage === 0 && <Tex x={20} y={176} w={820} h={30} size={14} color={T.ink} tex={`\\mathrm{hist}_r[\\ell=${bi}]=${locals.map((h) => c(h[bi], ex)).join(",\\;")}\\quad(r=0,\\dots,${ranks - 1})`} />}
+        {step.stage === 1 && <Tex x={20} y={328} w={820} h={32} size={14} color={T.ink} tex={`\\mathrm{hist}[\\ell=${bi}]=\\sum_{r}\\mathrm{hist}_r[\\ell]=${locals.map((h) => c(h[bi], ex)).join("+")}=${c(pooled[bi], ex)}`} />}
+        {step.stage >= 2 && <Tex x={20} y={330} w={820} h={30} size={14} color={T.accent2} tex={`\\hat b_{\\mathrm{E}_{${ex}}}=-\\mathrm{quantile}_{q}(\\mathrm{hist})=-(${d2(thr)})=${c(d2(-thr), ex)}`} />}
+        {step.stage >= 2 && <text x={20} y={376} fontFamily={mono} fontSize="11.5" fill={T.soft}>same quantile as sorting all {m} margins, up to bin width</text>}
+        {step.stage >= 1 && <text x={20} y={402} fontFamily={mono} fontSize="11" fill={T.dim}>traffic = bins × experts, whatever the number of tokens or ranks</text>}
       </g>
     );
   } else if (step.scene === "apply") {
@@ -240,10 +273,10 @@ export default function KimiView() {
       blocks={BLOCKS}
       steps={STEPS}
       header={(step) => (step.pick === "tok" ? picker("follow token", tok, setTok, 8) : step.pick === "ex" ? picker("follow expert", ex, setEx, n) : null)}
-      scene={(step) => <Scene step={step} tok={tok} ex={ex} />}
+      scene={(step) => <Scene step={step} tok={tok} ex={ex} setEx={setEx} />}
       glossary={KIMI_GLOSSARY}
       shapes={(step) => KIMI_SHAPES[step.block === "race" ? "race" : step.sid]}
-      legend={<span>source: Kimi K3 technical report, §2.3.3 · toy numbers, not K3's (896 experts, k = 16)</span>}
+      legend={<span>source: Kimi K3 technical report · toy numbers, not K3's (896 experts, k = 16)</span>}
     />
   );
 }

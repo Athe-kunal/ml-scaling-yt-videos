@@ -45,7 +45,7 @@ export const KIMI_GLOSSARY = {
 
 const SB = r("s + b", ["B", "N"], "biased score of every token for every expert");
 const AL = r("α", ["B"], "per token: its (k+1)-th largest biased score, the line an expert must beat");
-const MG = r("margin", ["B", "N"], "margin[t,j] = s[t,j] − α[t]: above 0 means expert j is in token t's top-k");
+const MG = r("margin", ["B", "N"], "margin[t,j] = s[t,j] − α[t]: above −b_j (above 0 while b = 0) means expert j is in token t's top-k");
 const BH = r("b̂", ["N"], "raw bias for each expert before centring");
 const KB = r("b", ["N"], "final bias: b̂ with its mean removed");
 

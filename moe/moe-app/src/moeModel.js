@@ -71,17 +71,19 @@ export function top2Gating(gates, C, rnds) {
   return { gates, toks, m, cPass1, cFinal: [...c], aux, C };
 }
 
-export function buildModel(seed = SEED) {
+// E and C default to the GShard toy (4 experts); the all-to-all tab passes a
+// larger E to put several experts on each device.
+export function buildModel(seed = SEED, E = CFG.E, C = CFG.C) {
   const r = rng(seed);
   const groups = Array.from({ length: CFG.G }, () => {
     const gates = Array.from({ length: CFG.S }, () =>
-      softmax(Array.from({ length: CFG.E }, (_, e) => BIAS[e] + 1.1 * randn(r))),
+      softmax(Array.from({ length: E }, (_, e) => BIAS[e % BIAS.length] + 1.1 * randn(r))),
     );
     const rnds = Array.from({ length: CFG.S }, () => r());
-    return top2Gating(gates, CFG.C, rnds);
+    return top2Gating(gates, C, rnds);
   });
   // tickets that really reach an expert buffer
-  const load = Array(CFG.E).fill(0);
+  const load = Array(E).fill(0);
   groups.forEach((g) => g.toks.forEach((t) => t.final.forEach((f) => (load[f.e] += 1))));
   return { groups, load };
 }

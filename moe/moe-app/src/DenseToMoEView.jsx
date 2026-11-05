@@ -22,6 +22,7 @@ const DN = { x: AREA.x + 10 + DM.w + 50, w: DM.w };
 
 const CAPTION = [
   "dense: W_up widens every token from M to H, W_down narrows it back",
+  "cut W_up and W_down into one up/down pair per expert",
   "s shared experts always run; N routed experts wait for a router",
   "the router scores the token and only the top-k routed experts run",
 ];
@@ -127,14 +128,19 @@ function Bar({ label, sub, segs, max, on = true }) {
 
 export default function DenseToMoEView() {
   const [stage, setStage] = useState(0);
-  const [N, setN] = useState(16);
+  const [N0, setN0] = useState(8); // experts in the conventional MoE, each as big as the dense FFN
   const [s, setS] = useState(1);
-  const [k, setK] = useState(2);
+  const [k0, setK0] = useState(2); // its top-k
   const [tokId, setTokId] = useState(1);
   const [playing, setPlaying] = useState(false);
-  const [inv, setInv] = useState(2); // fine-grained ratio r = 1/inv: expert hidden width = r · H
+  const [m0, setM0] = useState(2); // fine-grained factor: each expert is cut into m pieces
   const [M, setM] = useState(1024);
-  const kk = Math.min(k, N);
+  // DeepSeekMoE fine-grained segmentation: cut each expert into m smaller ones
+  // (width H/m) and activate m times as many, so total and active params stay put.
+  const m = Math.min(m0, Math.floor(256 / N0), 32);
+  const N = N0 * m;
+  const kk = Math.min(k0 * m, N);
+  const inv = m;
 
   useEffect(() => {
     const onKey = (e) => {
@@ -188,8 +194,6 @@ export default function DenseToMoEView() {
   const repE = stage >= 3 ? s + route.picked[0].i : stage >= 2 ? s : 0; // expert whose shapes are written out
   const rHn = Math.round(He);
 
-  const setRatio = (pct) => setK(Math.max(1, Math.min(N, Math.round((pct / 100) * N))));
-
   // wires for stage 3
   const mid = AREA.y + AREA.h / 2;
   const wires = [];
@@ -214,21 +218,15 @@ export default function DenseToMoEView() {
       </header>
 
       <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: "12px 16px", display: "flex", gap: 20, flexWrap: "wrap" }}>
-        <Slider label="routed experts N" value={N} min={2} max={256} onChange={(v) => { setN(v); setK((q) => Math.min(q, v)); }} hint={`router has N outputs: W_g [M, ${N}]`} />
+        <Slider label="experts before splitting N₀" value={N0} min={2} max={32} onChange={(v) => { setN0(v); setK0((q) => Math.min(q, v)); }} hint={`a conventional MoE: ${N0} experts, each as big as the dense FFN`} />
+        <Slider label="top-k₀ of those" value={Math.min(k0, N0)} min={1} max={N0} onChange={setK0} hint={`${Math.min(k0, N0)} of ${N0} experts run per token`} />
+        <Slider label="fine-grained factor m" value={m} min={1} max={Math.min(32, Math.floor(256 / N0))} onChange={setM0} fmt={(v) => `×${v}`} hint={`each expert → ${m} pieces of width H/${m}: N = ${N0}·${m} = ${N}, k = ${Math.min(k0, N0)}·${m} = ${kk}`} />
         <Slider label="shared experts s" value={s} min={0} max={4} onChange={setS} hint={s ? `${s} block${s > 1 ? "s" : ""} every token passes through` : "none: every expert is routed"} />
-        <Slider label="activated experts k" value={kk} min={1} max={N} onChange={setK} hint="how many routed blocks light up per token" />
-        <div style={{ display: "grid", gap: 6, minWidth: 200, flex: 1 }}>
-          <Slider label="fine-grained ratio r" value={inv} min={1} max={32} onChange={setInv} fmt={() => rTxt} hint={`expert width = r · H = ${Math.round(He)} of H = ${Hd}`} />
-          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <button onClick={() => setInv(Math.min(32, n))} title="r = 1/(N+s): all experts together hold exactly the dense W_up and W_down" style={{ ...btn(false, false), height: 24, fontSize: 10.5, padding: "0 8px" }}>r = 1/(N+s)</button>
-            <label style={{ fontFamily: mono, fontSize: 11, color: T.dim }}>M ={" "}
-              <select value={M} onChange={(e) => setM(+e.target.value)} style={{ fontFamily: mono, background: T.well, color: T.ink, border: `1px solid ${T.rule}`, borderRadius: 5, padding: "2px 4px" }}>
-                {[512, 1024, 2048, 4096, 7168].map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>{" "}· H = 4M
-            </label>
-          </div>
-        </div>
-        <Slider label="sparsity ratio k / N" value={Math.round(ratio * 100)} min={2} max={100} onChange={setRatio} fmt={(v) => `${(ratio * 100).toFixed(ratio < 0.1 ? 1 : 0)}%`} hint={`${kk} of ${N} routed experts`} />
+        <label style={{ fontFamily: mono, fontSize: 11, color: T.dim, alignSelf: "end" }}>M ={" "}
+          <select value={M} onChange={(e) => setM(+e.target.value)} style={{ fontFamily: mono, background: T.well, color: T.ink, border: `1px solid ${T.rule}`, borderRadius: 5, padding: "2px 4px" }}>
+            {[512, 1024, 2048, 4096, 7168].map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>{" "}· H = 4M
+        </label>
       </div>
 
       <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: 12 }}>
@@ -358,7 +356,7 @@ export default function DenseToMoEView() {
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <Stat k="ACTIVE NEURONS / TOKEN" v={`${(active * 100).toFixed(active < 0.1 ? 1 : 0)}%`} sub={`(s + k) / (N + s) = ${s + kk} / ${n} experts`} tone={stage >= 3 ? T.accent : T.ink} />
-        <Stat k="FFN COMPUTE VS DENSE" v={`${(1 / active).toFixed(1)}× less`} sub="router cost is tiny: one [M, N] matmul" tone={stage >= 3 ? T.accent : T.ink} />
+        <Stat k="FFN COMPUTE VS DENSE" v={(s + kk) * r <= 1 ? `${(1 / ((s + kk) * r)).toFixed(1)}× less` : `${((s + kk) * r).toFixed(1)}× more`} sub={`(s + k) · r = ${s + kk} · ${rTxt} of a dense FFN · router: one [M, N] matmul`} tone={stage >= 3 ? T.accent : T.ink} />
         <Stat k="SPARSITY k / N" v={`${(ratio * 100).toFixed(ratio < 0.1 ? 1 : 0)}%`} sub={`${N - kk} of ${N} routed experts idle per token`} />
       </div>
 
@@ -370,7 +368,7 @@ export default function DenseToMoEView() {
           <Bar label="MoE · used per token" sub={`(${s} + ${kk}) · 2·M·${heTxt} + router`} on={stage >= 3} segs={[[(s + kk) * expertP, T.accent2], [routerP, T.wire]]} max={maxP} />
           <div style={{ display: "grid", gap: 6, fontFamily: mono, fontSize: 12, color: T.soft, opacity: stage >= 1 ? 1 : 0.35, transition: "opacity .4s" }}>
             <div>stored: <b style={{ color: totalP > denseP ? T.wire : T.accent }}>{signed(totalP - denseP)}</b> vs dense ({pct(totalP / denseP - 1)})<span style={{ color: T.dim }}> · {n} · r = {(n * r).toFixed(2)}× the dense FFN, plus router M·N = {fmtP(routerP)}</span></div>
-            <div style={{ opacity: stage >= 3 ? 1 : 0.35 }}>per token: <b style={{ color: activeP < denseP ? T.accent : T.bad }}>{signed(activeP - denseP)}</b> vs dense ({pct(activeP / denseP - 1)}){activeP > denseP && <span style={{ color: T.dim }}> · more compute than dense: full-size experts cost k times a dense FFN</span>}</div>
+            <div style={{ opacity: stage >= 3 ? 1 : 0.35 }}>per token: <b style={{ color: activeP < denseP ? T.accent : T.bad }}>{signed(activeP - denseP)}</b> vs dense ({pct(activeP / denseP - 1)}){activeP > denseP && <span style={{ color: T.dim }}> · more compute than dense: (s + k) · r = {((s + kk) * r).toFixed(2)} dense FFNs per token</span>}</div>
           </div>
           <div style={{ display: "flex", gap: 14, fontFamily: mono, fontSize: 10.5, color: T.dim, flexWrap: "wrap" }}>
             <span><b style={{ color: T.soft }}>■</b> experts</span><span><b style={{ color: T.wire }}>■</b> router M·N (new)</span><span><b style={{ color: T.accent2 }}>■</b> active experts</span>

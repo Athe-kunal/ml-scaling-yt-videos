@@ -1,12 +1,14 @@
-import { T, mono } from "./theme";
+import { useState } from "react";
+import { T, mono, btn } from "./theme";
 import { LB, XC, scoresOf, route, loadsOf, auxTerms, simulate } from "./lbModel";
 import { Bars, Lines, f2 } from "./charts";
 import Stepper from "./Stepper";
 import { DS_GLOSSARY, DS_SHAPES, DEV_GLOSSARY, DEV_SHAPES } from "./lbShapes";
 import { DEV, devOf, devScores, routeDev } from "./devRoute";
+import { Tex } from "./tex";
 
 // DeepSeek-V3 (arXiv 2412.19437, §2.1.2): sigmoid router, auxiliary balance loss
-// (eq. 17-20, sequence-wise), then auxiliary-loss-free balancing (eq. 16):
+// (eq. 17-20, sequence-wise), then auxiliary-loss-free balancing:
 // a per-expert bias b_i steers top-K selection only; the gate still uses s.
 
 const { n, k, T: TT } = LB;
@@ -25,18 +27,33 @@ const srcDev = (t) => Math.floor(t / (DEV.B / DEV.D));
 const crossOf = (R) => R.reduce((a, r, t) => a + r.devs.filter((d) => d !== srcDev(t)).length, 0);
 
 const BLOCKS = [
-  { id: "route", label: "route with sigmoid + top-K", sub: "eq. 13–15", code: ["s   = sigmoid(u @ e.T)            # [T,d]·[d,N] → [T,N]  (eq 15)", "idx = topk(s, K)                   # [T,N] → [T,K]  (eq 14)", "g   = s[idx] / s[idx].sum()        # [T,K]  (eq 13)"] },
-  { id: "aux", label: "auxiliary balance loss", sub: "eq. 17–20 · f_i · P_i", code: ["f = N/(K*T) * onehot(idx).sum(0)   # [T,K,N] → [N]  (eq 18)", "P = (s / s.sum(-1)).mean(0)         # [T,N] → [N]  (eq 19-20)", "L_bal = alpha * (f * P).sum()       # [N]·[N] → scalar  (eq 17)"] },
-  { id: "bias", label: "bias steers selection", sub: "loss-free · eq. 16", code: ["idx = topk(s + b, K)               # [T,N] + [N] → [T,K]  (eq 16: bias picks…)", "g   = s[idx] / s[idx].sum()        # [T,K]  …gate uses s only"] },
-  { id: "monitor", label: "monitor expert load", sub: "whole batch, every step", code: ["load = onehot(idx).sum(0)          # [T,K,N] → [N]  tokens per expert"] },
-  { id: "update", label: "bias update", sub: "± γ", code: ["err = load.mean() - load         # [N]", "b  += gamma * sign(err)           # [N]  overloaded ↓, underloaded ↑"] },
-  { id: "loop", label: "repeat each training step", sub: "balance emerges", loop: true, code: ["for step in training:", "    idx  = topk(s + b, K)", "    load = count(idx)", "    b   += gamma * sign(load.mean() - load)"] },
-  { id: "devroute", label: "device-limited routing", sub: "≤ M devices per token · §2.1.2", code: [
-    "dev_score = topk(s.view(D, E // D), K // M).sum(-1)   # [E] → [D, E/D] → [D]",
-    "keep = topk(dev_score, M).indices   # [D] → [M] devices",
-    "s_dev = s.masked_fill(~on(keep), -inf)   # [E]: experts elsewhere cannot win",
-    "idx = topk(s_dev, K).indices   # [E] → [K], all on ≤ M devices"] },
-  { id: "shuffle", label: "router shuffle: all-to-all", sub: "dispatch → experts → combine · §3.2.2", code: [
+  { id: "route", label: "route with sigmoid + top-K", sub: "sigmoid scores → top-K → gates", code: [
+    "s   = sigmoid(u @ e.T)   # u [T,d] @ e.T [d,N] → [T,N] · s[t,i] = token t's score for expert i",
+    "idx = topk(s, K)   # top-K over N: [T,N] → [T,K] · idx[t] = token t's K expert ids",
+    "g   = s[idx] / s[idx].sum(-1, keepdim=True)   # [T,K] / (sum over K → [T,1]) → [T,K] · g[t,k] = gate of token t's k-th expert"] },
+  { id: "aux", label: "auxiliary balance loss", sub: "f_i · P_i", code: [
+    "f = N/(K*T) * onehot(idx).sum((0, 1))   # [T,K,N] → sum over T,K → [N] · f[i] = expert i's share of routes (1 = fair)",
+    "P = (s / s.sum(-1, keepdim=True)).mean(0)   # [T,N] / (sum over N → [T,1]) → [T,N] → mean over T → [N] · P[i] = expert i's avg soft score",
+    "L_bal = alpha * (f * P).sum()   # [N]·[N] → [N] → sum over N → scalar · alpha = loss weight"] },
+  { id: "bias", label: "bias steers selection", sub: "loss-free", code: [
+    "idx = topk(s + b, K)   # s [T,N] + b [N] → [T,N] → top-K over N → [T,K] · b[i] = expert i's bias, used only to pick",
+    "g   = s[idx] / s[idx].sum(-1, keepdim=True)   # [T,K] · uses the raw s, not s + b"] },
+  { id: "monitor", label: "monitor expert load", sub: "whole batch, every step", code: [
+    "load = onehot(idx).sum((0, 1))   # [T,K,N] → sum over T,K → [N] · load[i] = tokens expert i received"] },
+  { id: "update", label: "bias update", sub: "± γ", code: [
+    "err = load.mean() - load   # mean over N → scalar; load [N] → err [N] · err[i] > 0: expert i is underloaded",
+    "b  += gamma * sign(err)   # [N] · gamma = step size; b[i] goes up if underloaded, down if overloaded"] },
+  { id: "loop", label: "repeat each training step", sub: "balance emerges", loop: true, code: [
+    "for step in training:   # one batch per step",
+    "    idx  = topk(s + b, K)   # [T,K]",
+    "    load = count(idx)   # [N] tokens per expert",
+    "    b   += gamma * sign(load.mean() - load)   # [N]"] },
+  { id: "devroute", label: "device-limited routing", sub: "≤ M devices per token", code: [
+    "dev_score = topk(s.view(D, E // D), K // M).values.sum(-1)   # s [E] → [D, E/D] → top K/M per device → sum over them → [D] · dev_score[d] = score of device d",
+    "keep = topk(dev_score, M).indices   # top-M over D: [D] → [M] · keep = device ids this token may use",
+    "s_dev = s.masked_fill(~on(keep), -inf)   # [E] · experts outside keep get -inf",
+    "idx = topk(s_dev, K).indices   # top-K over E: [E] → [K] · all on ≤ M devices"] },
+  { id: "shuffle", label: "router shuffle: all-to-all", sub: "dispatch → experts → combine", code: [
     "dest = device_of(idx)   # [B, K] expert ids → device ids",
     "recv = all_to_all(x, dest)   # a copy of each token goes to every device it needs",
     "out = experts(recv)   # runs locally, no network",
@@ -99,8 +116,8 @@ function Heat({ scores, rt, base, stage, bias }) {
                     stroke={flip ? (on ? T.accent2 : T.wire) : on && stage >= 1 ? T.ink : "none"} strokeWidth={flip ? 2.2 : 1.4} strokeDasharray={flip && !on ? "3 2" : "none"}
                   />
                   {show && (
-                    <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + t * ch + 12} textAnchor="middle" fontFamily={mono} fontSize="9.5" fontWeight="600" fill={T.ink}>
-                      {stage >= 1.5 && on && !bias ? f2(s / gsum) : f2(s)}
+                    <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + t * ch + 12} textAnchor="middle" fontFamily={mono} fontSize={stage >= 1.5 && on && !bias ? 8.5 : 9.5} fontWeight="600" fill={T.ink}>
+                      {stage >= 1.5 && on && !bias ? `${f2(s)}→${f2(s / gsum)}` : f2(s)}
                     </text>
                   )}
                 </g>
@@ -113,7 +130,40 @@ function Heat({ scores, rt, base, stage, bias }) {
   );
 }
 
-function Scene({ step }) {
+// Token x0 worked through: which experts top-K keeps, and how their gates come out.
+function Worked({ rt, stage }) {
+  const row = SEQ[0], sel = rt[0].sel;
+  const v = (j) => f2(row[j]);
+  const sum = sel.reduce((a, j) => a + row[j], 0);
+  const names = sel.map((j) => `\\mathrm{E}_{${j}}`).join(",\\;");
+  // numbers carry the colour of their expert, matching the ringed cells in the grid
+  const cc = (j) => `{\\color{${XC[j]}}\\mathbf{${v(j)}}}`;
+  const vals = sel.map((j) => `s_{\\mathrm{E}_{${j}}}=${cc(j)}`).join(",\\;");
+  const gates = sel.map((j) => `g_{\\mathrm{E}_{${j}}}=\\dfrac{${cc(j)}}{${sel.map(cc).join("+")}}=${f2(row[j] / sum)}`);
+  return (
+    <g>
+      <rect x={46} y={53} width={n * 50 + 2} height={22} rx={5} fill="none" stroke={T.accent} strokeWidth={1.6} />
+      <text x={470} y={156} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim}>TOKEN x0 (OUTLINED ROW)</text>
+      {stage === 1 && (
+        <g>
+          <Tex x={470} y={166} w={380} h={30} size={14} color={T.ink} tex={`\\mathrm{idx}=\\operatorname{TopK}(s,\\,K=${k})=\\{${names}\\}`} />
+          <Tex x={470} y={200} w={380} h={30} size={13} color={T.soft} tex={`${vals}`} />
+          <Tex x={470} y={234} w={380} h={30} size={12} color={T.dim} tex={`\\text{the other ${n - k} scores are dropped}`} />
+        </g>
+      )}
+      {stage === 1.5 && (
+        <g>
+          <Tex x={470} y={166} w={380} h={52} size={15} color={T.ink} tex={`g_i=\\dfrac{s_i}{\\sum_{j\\in\\mathrm{idx}} s_j}\\qquad i\\in\\mathrm{idx}`} />
+          <Tex x={470} y={222} w={380} h={28} size={13} color={T.wire} tex={`${vals}\\;\\text{(left number in each ringed cell)}`} />
+          {gates.map((g, i) => <Tex key={i} x={470} y={256 + i * 50} w={380} h={46} size={14} color={T.soft} tex={g} />)}
+          <Tex x={470} y={256 + gates.length * 50} w={380} h={30} size={13} color={T.accent} tex={`${sel.map((j) => `g_{\\mathrm{E}_{${j}}}`).join("+")}=1`} />
+        </g>
+      )}
+    </g>
+  );
+}
+
+function Scene({ step, ex, setEx }) {
   const rt0 = route(SEQ, ZERO);
   const mu = (LB.m * k) / n;
   let body = null;
@@ -128,27 +178,28 @@ function Scene({ step }) {
             <text x={500} y={355} fontFamily={mono} fontSize="11" fill={T.dim}>E0 and E1 take {AUX.cnt[0] + AUX.cnt[1]} of {TT * k} routes</text>
           </g>
         )}
-        {step.stage >= 1 && step.stage < 2 && <text x={500} y={120} fontFamily={mono} fontSize="11.5" fill={T.soft}>ringed = chosen{step.stage >= 1.5 ? " · number = gate g" : ""}</text>}
+        {step.stage >= 1 && step.stage < 2 && <Worked rt={rt0} stage={step.stage} />}
+        {step.stage >= 1 && step.stage < 2 && <text x={500} y={120} fontFamily={mono} fontSize="11.5" fill={T.soft}>ringed = chosen{step.stage >= 1.5 ? " · in a cell: score s → gate g" : ""}</text>}
       </g>
     );
   } else if (step.scene === "aux") {
     const st = step.stage;
+    const col = XC[ex];
+    const c = (x) => `{\\color{${col}}\\mathbf{${x}}}`; // the numbers to point at: same colour as the highlighted bars
+    const d2 = (v) => v.toFixed(2);
+    const rowSum = (t) => SEQ[t].reduce((a, v) => a + v, 0);
+    const term = (t) => `\\dfrac{${c(d2(SEQ[t][ex]))}}{${d2(rowSum(t))}}`;
+    const E = `\\mathrm{E}_{${ex}}`;
     body = (
       <g>
-        <Bars x={20} y={70} w={250} h={180} values={AUX.f} ideal={1} fmt={f2} title="f_i  (FRACTION ROUTED)" flag={AUX.f.map((v, j) => (v > 1.5 ? j : -1)).filter((j) => j >= 0)} />
-        {st >= 1 && <Bars x={305} y={70} w={250} h={180} values={AUX.P} ideal={1 / n} fmt={f2} title="P_i  (MEAN SOFT SCORE)" arrows={st >= 2 ? AUX.f.map((v) => (v > 1 ? -1 : 0)) : null} />}
-        {st >= 2 && <Bars x={590} y={70} w={250} h={180} values={AUX.prod} ideal={1 / n} fmt={f2} title="f_i · P_i" />}
-        <g fontFamily={mono} fontSize="11.5" fill={T.soft}>
-          <text x={20} y={300}>f_i = N/(K·T) · #tokens that picked i      <tspan fill={T.dim}>1 = fair share · top-K, no gradient</tspan></text>
-          {st >= 1 && <text x={20} y={324}>P_i = mean_t  s_it / Σ_j s_jt           <tspan fill={T.dim}>smooth · carries the gradient</tspan></text>}
-          {st >= 2 && (
-            <g>
-              <text x={20} y={352} fontWeight="700" fill={T.accent2}>L_bal = α · Σ f_i·P_i = α · {AUX.loss.toFixed(2)}</text>
-              <text x={20} y={374} fill={T.dim}>balanced router gives α · 1.00 · ▼ = gradient lowers P of busy experts</text>
-              <text x={20} y={396} fill={T.dim}>too large α hurts quality, so V3 avoids leaning on it</text>
-            </g>
-          )}
-        </g>
+        <Bars x={20} y={70} w={250} h={180} values={AUX.f} ideal={1} fmt={f2} title="f_i  (FRACTION ROUTED)" hl={ex} onPick={setEx} flag={AUX.f.map((v, j) => (v > 1.5 ? j : -1)).filter((j) => j >= 0)} />
+        {st >= 1 && <Bars x={305} y={70} w={250} h={180} values={AUX.P} ideal={1 / n} fmt={f2} title="P_i  (MEAN SOFT SCORE)" hl={ex} onPick={setEx} arrows={st >= 2 ? AUX.f.map((v) => (v > 1 ? -1 : 0)) : null} />}
+        {st >= 2 && <Bars x={590} y={70} w={250} h={180} values={AUX.prod} ideal={1 / n} fmt={f2} title="f_i · P_i" hl={ex} onPick={setEx} />}
+        <Tex x={20} y={284} w={820} h={42} size={14} color={T.ink} tex={`f_{${E}}=\\dfrac{N}{K\\,T}\\,n_{${E}}=\\dfrac{${n}}{${k}\\cdot ${TT}}\\cdot ${c(AUX.cnt[ex])}=${c(d2(AUX.f[ex]))}`} />
+        {st >= 1 && <Tex x={20} y={330} w={840} h={42} size={14} color={T.ink} tex={`P_{${E}}=\\dfrac{1}{T}\\sum_{t=1}^{T}\\dfrac{s_{${E},t}}{\\sum_{j} s_{j,t}}=\\dfrac{1}{${TT}}\\Big(${term(0)}+${term(1)}+\\cdots+${term(TT - 1)}\\Big)=\\dfrac{${c(d2(AUX.P[ex] * TT))}}{${TT}}=${c(d2(AUX.P[ex]))}`} />}
+        {st >= 2 && <Tex x={20} y={376} w={840} h={28} size={14} color={T.accent2} tex={`f_{${E}}P_{${E}}=${d2(AUX.f[ex])}\\cdot ${d2(AUX.P[ex])}=${c(d2(AUX.prod[ex]))}\\qquad L_{\\mathrm{bal}}=\\alpha\\sum_{i} f_i P_i=\\alpha\\,(\\cdots+${c(d2(AUX.prod[ex]))}+\\cdots)=\\alpha\\cdot ${d2(AUX.loss)}`} />}
+        <Tex x={20} y={406} w={840} h={22} size={11.5} color={T.dim} tex={st === 0 ? `n_{${E}}=\\text{tokens that picked }${E}\\text{ (of }${TT}\\text{); }f=1\\text{ is a fair share; top-}K\\text{ is a hard choice, so no gradient}` : st === 1 ? `\\text{each token's scores are rescaled to sum to 1, then averaged over tokens: smooth, so it carries the gradient}` : `\\downarrow\\text{ the gradient lowers }P\\text{ of busy experts; a large }\\alpha\\text{ hurts quality, so V3 keeps it tiny}`} />
+        <text x={20} y={60 - 36} fontFamily={mono} fontSize="10" fill={T.dim}>click a bar, or pick an expert above: its numbers light up below</text>
       </g>
     );
   } else if (step.scene === "bias") {
@@ -183,12 +234,17 @@ function Scene({ step }) {
     const l = SIM[0].loads;
     const err = l.map((v) => mu - v);
     const b1 = SIM[0].next;
+    const col = XC[ex];
+    const c = (x) => `{\\color{${col}}\\mathbf{${x}}}`; // the numbers to point at, coloured like the expert's bars
+    const E = `\\mathrm{E}_{${ex}}`;
+    const sg = Math.sign(err[ex]);
     body = (
       <g>
-        <Bars x={30} y={70} w={380} h={220} values={err} fmt={(v) => v.toFixed(0)} title="mean load − load_j" arrows={err.map((v) => Math.sign(v))} />
-        {step.stage >= 1 && <Bars x={450} y={70} w={380} h={220} values={b1} min={-GAMMA * 1.5} max={GAMMA * 1.5} fmt={(v) => v.toFixed(3)} title="NEW BIAS b_j  (STARTED AT 0)" />}
-        {step.stage >= 1 && <text x={30} y={340} fontFamily={mono} fontSize="13" fontWeight="700" fill={T.accent2}>b_j ← b_j + γ · sign(mean − load_j)</text>}
-        {step.stage >= 1 && <text x={30} y={364} fontFamily={mono} fontSize="11" fill={T.dim}>fixed step γ = {GAMMA}: same size for a mild or a huge imbalance</text>}
+        <Bars x={30} y={70} w={380} h={220} values={err} fmt={(v) => v.toFixed(0)} title="err_j = mean load − load_j" arrows={err.map((v) => Math.sign(v))} hl={ex} onPick={setEx} />
+        {step.stage >= 1 && <Bars x={450} y={70} w={380} h={220} values={b1} min={-GAMMA * 1.5} max={GAMMA * 1.5} fmt={(v) => v.toFixed(3)} title="NEW BIAS b_j  (STARTED AT 0)" hl={ex} onPick={setEx} />}
+        <Tex x={30} y={328} w={820} h={28} size={14} color={T.ink} tex={`\\mathrm{err}_{${E}}=\\bar\\ell-\\ell_{${E}}=${mu}-${c(l[ex])}=${c(err[ex])}\\qquad\\bar\\ell=\\dfrac{${LB.m}\\cdot ${k}}{${n}}=${mu}\\text{ (fair share)}`} />
+        {step.stage >= 1 && <Tex x={30} y={358} w={820} h={28} size={14} color={T.accent2} tex={`b_{${E}}\\leftarrow b_{${E}}+\\gamma\\,\\mathrm{sign}(\\mathrm{err}_{${E}})=0+${GAMMA}\\cdot(${c(sg)})=${c((sg * GAMMA).toFixed(3))}`} />}
+        <Tex x={30} y={392} w={820} h={24} size={11.5} color={T.dim} tex={step.stage === 0 ? `\\mathrm{err}>0:\\text{ underloaded}\;(\\uparrow\\text{ raise }b)\\qquad \\mathrm{err}<0:\\text{ overloaded}\;(\\downarrow\\text{ lower }b)` : `\\gamma\\text{ is fixed: a mild or a huge imbalance moves }b\\text{ by the same }\\pm${GAMMA}`} />
       </g>
     );
   } else if (step.scene === "loop") {
@@ -196,7 +252,7 @@ function Scene({ step }) {
     body = (
       <g>
         <Bars x={20} y={70} w={260} h={190} values={r.loads} ideal={mu} title="LOAD THIS STEP" />
-        <Bars x={305} y={70} w={260} h={190} values={r.b} min={-0.18} max={0.18} fmt={(v) => f2(v)} title="BIAS b_j" />
+        <Bars x={305} y={70} w={260} h={190} values={r.b} min={-0.3} max={0.3} fmt={(v) => f2(v)} title="BIAS b_j" />
         <Lines x={600} y={70} w={240} h={190} series={[{ pts: SIM.map((q) => q.cv), color: T.accent2, label: "load CV" }]} ymax={1} upTo={step.t} title="IMBALANCE OVER TIME" />
         <text x={20} y={310} fontFamily={mono} fontSize="12" fill={T.soft}>step {step.t} · bias of popular experts sinks, rare ones rise</text>
         <text x={20} y={334} fontFamily={mono} fontSize="11" fill={T.dim}>γ = {GAMMA} here; the paper uses 0.001 over many more steps</text>
@@ -242,7 +298,7 @@ function Scene({ step }) {
           {st === 2 && <text x={20} y={316}>an expert on a dropped device can no longer be picked, however high its own score</text>}
           {st >= 3 && <text x={20} y={316}>chosen: E{rr.idx.join(", E")} on {rr.devs.length} device{rr.devs.length > 1 ? "s" : ""}</text>}
           {st >= 3 && <text x={20} y={340} fill={T.bad}>▽ = would be picked without the limit: E{ru.idx.join(", E")} on {ru.devs.length} devices</text>}
-          {st >= 3 && <text x={20} y={364} fill={T.dim}>V3: at most 4 nodes per token; ~3.2 experts per node, so up to 13 routed experts cost the same traffic (§3.2.2)</text>}
+          {st >= 3 && <text x={20} y={364} fill={T.dim}>V3: at most 4 nodes per token; ~3.2 experts per node, so up to 13 routed experts cost the same traffic</text>}
         </g>
       </g>
     );
@@ -323,16 +379,25 @@ function Scene({ step }) {
 }
 
 export default function DeepSeekView() {
+  const [ex, setEx] = useState(0); // expert the equations are written out for
   return (
     <Stepper
       title="DeepSeek-V3 · load balancing"
       subtitle={`aux loss → auxiliary-loss-free bias · toy: N=${n} experts, K=${k}`}
       blocks={BLOCKS}
       steps={STEPS}
-      scene={(step) => <Scene step={step} />}
+      scene={(step) => <Scene step={step} ex={ex} setEx={setEx} />}
+      header={(step) => (step.scene === "aux" || step.scene === "update") && (
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <span style={{ fontSize: 10.5, color: T.dim, marginRight: 4 }}>point at expert</span>
+          {Array.from({ length: n }, (_, j) => (
+            <button key={j} onClick={() => setEx(j)} style={{ ...btn(j === ex, false), height: 28, padding: "0 9px", color: j === ex ? undefined : XC[j] }}>E{j}</button>
+          ))}
+        </div>
+      )}
       glossary={(step) => (step.block === "devroute" || step.block === "shuffle" ? DEV_GLOSSARY : DS_GLOSSARY)}
       shapes={(step) => (step.block === "devroute" || step.block === "shuffle" ? DEV_SHAPES : DS_SHAPES)[step.block === "loop" ? "loop" : step.sid]}
-      legend={<span>source: DeepSeek-V3 Technical Report, §2.1.2 (eq. 12–20) · <span style={{ color: T.wire }}>dashed</span> = balanced level</span>}
+      legend={<span>source: DeepSeek-V3 Technical Report · <span style={{ color: T.wire }}>dashed</span> = balanced level</span>}
     />
   );
 }

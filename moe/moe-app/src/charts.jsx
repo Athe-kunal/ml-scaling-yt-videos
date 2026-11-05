@@ -7,7 +7,7 @@ export const f2 = (x) => x.toFixed(2).replace(/^(-?)0\./, "$1.");
 
 // Vertical bars from a zero baseline (negative values hang below it).
 export function Bars({
-  x, y, w, h, values, max, min = 0, colors = XC, ideal, idealLabel = "balanced", title, fmt = (v) => v.toFixed(0), labels, dim = [], flag = [], showVals = true, arrows,
+  x, y, w, h, values, max, min = 0, colors = XC, ideal, idealLabel = "balanced", title, fmt = (v) => v.toFixed(0), labels, dim = [], flag = [], showVals = true, arrows, hl, onPick,
 }) {
   const n = values.length;
   const hi = max ?? Math.max(...values, ideal ?? 0) * 1.12;
@@ -30,6 +30,8 @@ export function Bars({
             {showVals && (
               <text x={x + j * bw + bw / 2} y={v >= 0 ? by - 5 : by + bh + 12} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={flag.includes(j) ? T.bad : T.soft}>{fmt(v)}</text>
             )}
+            {hl === j && <rect x={x + j * bw + 1} y={Math.min(by, zero) - (v >= 0 ? 16 : 2)} width={bw - 2} height={Math.max(bh, 0.5) + 20} rx={5} fill="none" stroke={T.ink} strokeWidth={2.2} />}
+            {onPick && <rect x={x + j * bw} y={y - 8} width={bw} height={h + 40} fill="transparent" style={{ cursor: "pointer" }} onClick={() => onPick(j)} />}
             {arrows && arrows[j] && (
               <text x={x + j * bw + bw / 2} y={y + h + 30} textAnchor="middle" fontFamily={mono} fontSize="12" fill={arrows[j] > 0 ? T.accent : T.bad}>{arrows[j] > 0 ? "▲" : "▼"}</text>
             )}

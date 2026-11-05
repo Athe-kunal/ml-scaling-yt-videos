@@ -188,7 +188,7 @@ export const STEPS = [
     tensors: {
       ins: [t("dispatched", ["E", "G", "C", "M"], { shard: "E" }), t("wi, wo", ["E", "M", "H"], { shard: "E" })],
       op: "einsum  →  relu  →  einsum   (no communication)",
-      outs: [t("expert_out", ["E", "G", "C", "M"], { shard: "E" })],
+      outs: [t("expert_out", ["G", "E", "C", "M"], { shard: "E" })],
     },
     vars: () => [["busy slots", MODEL.load.join(" · ")], ["idle", MODEL.load.map((l) => G * C - l).join(" · ")]],
   },
@@ -197,7 +197,7 @@ export const STEPS = [
     caption: "all-to-all back to each token's own device",
     lines: [0],
     tensors: {
-      ins: [t("expert_out", ["E", "G", "C", "M"], { shard: "E" })],
+      ins: [t("expert_out", ["G", "E", "C", "M"], { shard: "E" })],
       op: 'output sharding of  "EGCH,EHM->GECM"',
       outs: [t("expert_out", ["G", "E", "C", "M"], { shard: "G", comm: "ALL-TO-ALL  E → G" })],
     },
