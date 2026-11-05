@@ -5,6 +5,7 @@ import GatingView from "./GatingView";
 import A2AView from "./A2AView";
 import DeepSeekView from "./DeepSeekView";
 import KimiView from "./KimiView";
+import CompareView from "./CompareView";
 
 const VIEWS = [
   { id: "dense", label: "Dense → MoE", sub: "set sparsity, watch the FFN split into experts", C: DenseToMoEView },
@@ -12,6 +13,7 @@ const VIEWS = [
   { id: "a2a", label: "All-to-all", sub: "the collective behind dispatch / combine", C: A2AView },
   { id: "ds", label: "DeepSeek-V3 balancing", sub: "aux loss → loss-free bias", C: DeepSeekView },
   { id: "kimi", label: "Kimi K3 balancing", sub: "quantile-based bias", C: KimiView },
+  { id: "compare", label: "DeepSeek vs Kimi", sub: "the two balancing methods side by side", C: CompareView },
 ];
 
 export default function App() {

@@ -255,6 +255,8 @@ function Scene({ step, tok, ex, setEx }) {
 
 const order = (row) => row.map((_, j) => j).sort((a, b) => row[b] - row[a]);
 
+export { Scene as KimiScene, STEPS as KIMI_STEPS, BLOCKS as KIMI_BLOCKS };
+
 export default function KimiView() {
   const [tok, setTok] = useState(0);
   const [ex, setEx] = useState(0);

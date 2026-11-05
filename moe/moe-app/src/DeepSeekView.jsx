@@ -378,6 +378,8 @@ function Scene({ step, ex, setEx }) {
   return <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>{body}</svg>;
 }
 
+export { Scene as DsScene, STEPS as DS_STEPS, BLOCKS as DS_BLOCKS };
+
 export default function DeepSeekView() {
   const [ex, setEx] = useState(0); // expert the equations are written out for
   return (
