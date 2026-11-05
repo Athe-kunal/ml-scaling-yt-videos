@@ -5,6 +5,7 @@ import { Bars, Lines, f2, div } from "./charts";
 import Stepper from "./Stepper";
 import { Tex } from "./tex";
 import { KIMI_GLOSSARY, KIMI_SHAPES } from "./lbShapes";
+import { useProgress, ease, lerp, clamp01 } from "./anim";
 
 // Kimi K3 Quantile Balancing (arXiv 2607.24653, §2.3.3). Instead of nudging b_j by a
 // fixed ±γ, set it so expert j is chosen by exactly k/n of the batch:
@@ -28,6 +29,7 @@ const B2 = scoresOf(2);
 const SNAPS = [2, 5, 10, 25, 50];
 const NB = 16;
 const W = 860, H = 430;
+const lerpArr = (a, b, e) => a.map((v, i) => lerp(v, b[i], e));
 const firstBelow = (rec, thr) => rec.findIndex((r) => r.cv < thr);
 
 const BLOCKS = [
@@ -104,6 +106,8 @@ function Hist({ x, y, w, h, counts, lo, hi, thr, color, title, maxC, hlBin }) {
 }
 
 function Scene({ step, tok, ex, setEx }) {
+  const p = useProgress(step.id); // 0 → 1 each time a new picture arrives
+  const e = ease(p);
   let body = null;
   const d2 = (v) => v.toFixed(2);
   const c = (x, j) => `{\\color{${XC[j]}}\\mathbf{${x}}}`; // a number to point at, coloured like its expert
@@ -113,8 +117,8 @@ function Scene({ step, tok, ex, setEx }) {
     const r = (rec) => rec.map((q) => q.loads[0] / MU);
     body = (
       <g>
-        <Lines x={30} y={70} w={380} h={200} series={[{ pts: r(SLOW), color: T.accent, label: "γ small: slow" }]} ymax={4} ref1={1} title="EXPERT 0 LOAD / FAIR SHARE" />
-        <Lines x={450} y={70} w={380} h={200} series={[{ pts: r(FAST), color: T.bad, label: "γ large: oscillates" }]} ymax={4} ref1={1} title="EXPERT 0 LOAD / FAIR SHARE" />
+        <Lines x={30} y={70} w={380} h={200} series={[{ pts: r(SLOW), color: T.accent, label: "γ small: slow" }]} upTo={Math.floor(e * 60)} ymax={4} ref1={1} title="EXPERT 0 LOAD / FAIR SHARE" />
+        <Lines x={450} y={70} w={380} h={200} series={[{ pts: r(FAST), color: T.bad, label: "γ large: oscillates" }]} upTo={Math.floor(e * 60)} ymax={4} ref1={1} title="EXPERT 0 LOAD / FAIR SHARE" />
         <Tex x={30} y={296} w={500} h={30} size={15} color={T.accent2} tex={`b_j\\leftarrow b_j+\\gamma\\,\\mathrm{sign}(\\bar\\ell-\\ell_j)`} />
         <Tex x={330} y={298} w={520} h={26} size={11.5} color={T.dim} tex={`\\bar\\ell=\\text{mean load},\\;\\ell_j=\\text{load of expert }j,\\;\\gamma=\\text{fixed step}`} />
         <text x={30} y={344} fontFamily={mono} fontSize="11" fill={T.dim}>one step size for every expert and every imbalance; K3 has 896 experts and k = 16</text>
@@ -124,15 +128,18 @@ function Scene({ step, tok, ex, setEx }) {
   } else if (step.scene === "cutoff") {
     const r = RT0[tok];
     const cut = order(B0[tok]);
+    const sv = step.stage === 0 ? B0[tok].map((v) => lerp(0, v, e)) : B0[tok]; // scores rise from 0 (s + b, b = 0)
+    const aNow = lerp(1, r.cutoff, e); // the cutoff line slides down to the (k+1)-th score
+    const cn = (v) => (step.stage === 0 ? lerp(0, v, e) : v);
     body = (
       <g>
         <Bars
-          x={40} y={80} w={520} h={230} values={B0[tok]} max={1} ideal={step.stage >= 1 ? r.cutoff : undefined} idealLabel="α" fmt={f2}
+          x={40} y={80} w={520} h={230} values={sv} max={1} ideal={step.stage >= 1 ? aNow : undefined} idealLabel="α" fmt={f2}
           title={`TOKEN x${tok} · SCORE s + b  (b = 0 for now)`} dim={B0[tok].map((_, j) => j).filter((j) => !r.sel.includes(j) && j !== cut[k])} flag={step.stage >= 1 ? [cut[k]] : []}
         />
         <Tex x={40} y={340} w={800} h={32} size={14} color={T.ink} tex={step.stage === 0
-          ? `\\mathrm{TopK}(s_{x_{${tok}}}+b,\\,k{+}1)=\\{${cut.slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${c(d2(B0[tok][j]), j)}`).join(",\\;")}\\}`
-          : `\\alpha_{x_{${tok}}}=(k{+}1)\\text{-th largest}=\\mathrm{E}_{${cut[k]}}\\!:\\,${c(d2(B0[tok][cut[k]]), cut[k])}`} />
+          ? `\\mathrm{TopK}(s_{x_{${tok}}}+b,\\,k{+}1)=\\{${cut.slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${c(d2(cn(B0[tok][j])), j)}`).join(",\\;")}\\}`
+          : `\\alpha_{x_{${tok}}}=(k{+}1)\\text{-th largest}=\\mathrm{E}_{${cut[k]}}\\!:\\,${c(d2(aNow), cut[k])}`} />
         <g fontFamily={mono} fontSize="11.5" fill={T.soft}>
           <text x={600} y={120}>top-{k}: routed</text>
           {step.stage >= 1 && <text x={600} y={142} fill={T.bad}>(k+1)-th, red ring:</text>}
@@ -145,6 +152,9 @@ function Scene({ step, tok, ex, setEx }) {
   } else if (step.scene === "margin") {
     const x0 = 40, cw = 46, ch = 19, y0 = 56;
     const rows = 16;
+    const alpha = RT0[tok].cutoff;
+    const shift = (i, j) => QB0.margins[i][j] + RT0[i].cutoff * (1 - e); // s_ij → s_ij − α_i
+    const tokVals = QB0.margins[tok].map((_, j) => shift(tok, j));
     body = (
       <g>
         {Array.from({ length: n }, (_, j) => <text key={j} x={x0 + j * cw + cw / 2 - 2} y={y0 - 10} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={XC[j]}>E{j}</text>)}
@@ -152,24 +162,26 @@ function Scene({ step, tok, ex, setEx }) {
           <g key={i} opacity={i === tok ? 1 : 0.7}>
             <text x={x0 - 6} y={y0 + i * ch + 13} textAnchor="end" fontFamily={mono} fontSize="9.5" fill={i === tok ? T.ink : T.dim}>x{i}</text>
             {QB0.margins[i].map((v, j) => (
-              <rect key={j} x={x0 + j * cw} y={y0 + i * ch} width={cw - 3} height={ch - 3} rx={3} fill={div(v)} stroke={i === tok ? T.ink : "none"} />
+              <rect key={j} x={x0 + j * cw} y={y0 + i * ch} width={cw - 3} height={ch - 3} rx={3} fill={div(shift(i, j))} stroke={i === tok ? T.ink : "none"} />
             ))}
           </g>
         ))}
         <text x={x0} y={y0 + rows * ch + 20} fontFamily={mono} fontSize="10" fill={T.dim}>warm = above the cutoff · cool = below</text>
-        <Bars x={470} y={90} w={370} h={200} values={QB0.margins[tok]} fmt={f2} title={`TOKEN x${tok} · MARGIN s − α`} labels={XC.map((_, j) => `E${j}`)} />
-        <Tex x={470} y={318} w={390} h={30} size={12.5} color={T.ink} tex={order(B0[tok]).slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(B0[tok][j])}-${d2(RT0[tok].cutoff)}=${c(d2(QB0.margins[tok][j]), j)}`).join("\\;\\;")} />
+        <Bars x={470} y={90} w={370} h={200} values={tokVals} max={Math.max(...B0[tok]) * 1.12} min={Math.min(...QB0.margins[tok])} ideal={alpha * (1 - e)} idealLabel="α" fmt={f2} title={`TOKEN x${tok} · MARGIN s − α`} labels={XC.map((_, j) => `E${j}`)} />
+        <Tex x={470} y={318} w={390} h={30} size={12.5} color={T.ink} tex={order(B0[tok]).slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(B0[tok][j])}-${d2(alpha * e)}=${c(d2(B0[tok][j] - alpha * e), j)}`).join("\\;\\;")} />
         <text x={470} y={366} fontFamily={mono} fontSize="11" fill={T.dim}>routed experts &gt; 0 · the (k+1)-th is exactly 0</text>
       </g>
     );
   } else if (step.scene === "quantile") {
     const v = col(ex);
     const lo = Math.min(...v), hi = Math.max(...v);
-    const thr = step.stage >= 1 ? QB0.thr[ex] : null;
+    const cnt = hist(v, lo, hi);
+    const thr = step.stage >= 1 ? lerp(hi, QB0.thr[ex], e) : null; // threshold slides in from the right
+    const bhA = QB0.bhat.map((x) => lerp(0, x, e));
     const above = thr == null ? 0 : v.filter((x) => x > thr).length;
     body = (
       <g>
-        <Hist x={40} y={80} w={520} h={220} counts={hist(v, lo, hi)} lo={lo} hi={hi} thr={thr} color={XC[ex]} title={`EXPERT E${ex} · MARGINS OF ALL ${m} TOKENS`} />
+        <Hist x={40} y={80} w={520} h={220} counts={step.stage === 0 ? cnt.map((x) => x * e) : cnt} maxC={Math.max(...cnt, 1)} lo={lo} hi={hi} thr={thr} color={XC[ex]} title={`EXPERT E${ex} · MARGINS OF ALL ${m} TOKENS`} />
         {thr == null ? (
           <g>
             <Tex x={40} y={312} w={500} h={42} size={15} color={T.ink} tex={`q=1-\\dfrac{k}{N}=1-\\dfrac{${k}}{${n}}=${c(d2(1 - k / n), ex)}`} />
@@ -182,16 +194,17 @@ function Scene({ step, tok, ex, setEx }) {
             <Tex x={40} y={390} w={520} h={30} size={15} color={T.accent2} tex={`\\hat b_{\\mathrm{E}_{${ex}}}=-\\mathrm{quantile}=-(${d2(thr)})=${c(d2(-thr), ex)}`} />
           </g>
         )}
-        {thr != null && <Bars x={610} y={90} w={230} h={170} values={QB0.bhat} fmt={f2} title="b̂ FOR ALL EXPERTS" dim={XC.map((_, j) => j).filter((j) => j !== ex)} />}
+        {thr != null && <Bars x={610} y={90} w={230} h={170} values={bhA} max={Math.max(...QB0.bhat) * 1.12} min={Math.min(...QB0.bhat)} fmt={f2} title="b̂ FOR ALL EXPERTS" dim={XC.map((_, j) => j).filter((j) => j !== ex)} />}
       </g>
     );
   } else if (step.scene === "center") {
     const mu = QB0.bhat.reduce((a, x) => a + x, 0) / n;
+    const mx = Math.max(...QB0.bhat, ...QB0.b) * 1.12, mn = Math.min(...QB0.bhat, ...QB0.b);
     body = (
       <g>
-        <Bars x={30} y={80} w={380} h={210} values={QB0.bhat} fmt={f2} title="b̂ (RAW)" hl={ex} onPick={setEx} />
-        <Bars x={450} y={80} w={380} h={210} values={QB0.b} fmt={f2} title="b = b̂ − mean(b̂)" hl={ex} onPick={setEx} />
-        <Tex x={30} y={318} w={800} h={44} size={14} color={T.ink} tex={`b_{\\mathrm{E}_{${ex}}}=\\hat b_{\\mathrm{E}_{${ex}}}-\\dfrac{1}{N}\\sum_{i}\\hat b_i=${c(d2(QB0.bhat[ex]), ex)}-(${d2(mu)})=${c(d2(QB0.b[ex]), ex)}`} />
+        <Bars x={30} y={80} w={380} h={210} values={QB0.bhat} max={mx} min={mn} ideal={mu} idealLabel="mean" fmt={f2} title="b̂ (RAW)" hl={ex} onPick={setEx} />
+        <Bars x={450} y={80} w={380} h={210} values={lerpArr(QB0.bhat, QB0.b, e)} max={mx} min={mn} ideal={mu * (1 - e)} idealLabel="mean" fmt={f2} title="b = b̂ − mean(b̂)" hl={ex} onPick={setEx} />
+        <Tex x={30} y={318} w={800} h={44} size={14} color={T.ink} tex={`b_{\\mathrm{E}_{${ex}}}=\\hat b_{\\mathrm{E}_{${ex}}}-\\dfrac{1}{N}\\sum_{i}\\hat b_i=${c(d2(QB0.bhat[ex]), ex)}-(${d2(mu)})=${c(d2(lerp(QB0.bhat[ex], QB0.b[ex], e)), ex)}`} />
         <text x={30} y={384} fontFamily={mono} fontSize="12" fill={T.soft}>adding the same number to every expert never changes a top-k ranking</text>
       </g>
     );
@@ -201,18 +214,23 @@ function Scene({ step, tok, ex, setEx }) {
     const per = m / ranks;
     const locals = Array.from({ length: ranks }, (_, r) => hist(v.slice(r * per, (r + 1) * per), lo, hi));
     const pooled = locals[0].map((_, i) => locals.reduce((a, h) => a + h[i], 0));
-    const thr = QB0.thr[ex];
+    const thr0 = QB0.thr[ex];
+    const thr = step.stage >= 2 ? lerp(hi, thr0, e) : thr0; // stage 2: threshold slides in
     const mx = Math.max(...locals.flat(), 1);
-    const bi = Math.min(NB - 1, Math.max(0, Math.floor(((thr - lo) / (hi - lo)) * NB))); // the bin holding the threshold
+    const part = (r) => (step.stage === 0 ? e : 1); // stage 0: each rank fills its own bins
+    const acc = (r) => (step.stage === 1 ? clamp01(e * ranks - r) : 1); // stage 1: ranks add in one by one
+    const pooledA = pooled.map((_, i) => locals.reduce((a, h, r) => a + h[i] * acc(r), 0));
+    const pooledMax = Math.max(...pooled, 1);
+    const bi = Math.min(NB - 1, Math.max(0, Math.floor(((thr0 - lo) / (hi - lo)) * NB))); // the bin holding the threshold
     body = (
       <g>
         {locals.map((c, r) => (
-          <Hist key={r} x={20 + r * 210} y={70} w={190} h={80} counts={c} lo={lo} hi={hi} thr={step.stage >= 2 ? thr : null} color={XC[ex]} maxC={mx} hlBin={bi} title={`RANK ${r} · ${per} TOKENS`} />
+          <Hist key={r} x={20 + r * 210} y={70} w={190} h={80} counts={step.stage === 0 ? c.map((x) => x * part(r)) : c} lo={lo} hi={hi} thr={step.stage >= 2 ? thr : null} color={XC[ex]} maxC={mx} hlBin={bi} title={`RANK ${r} · ${per} TOKENS`} />
         ))}
         {step.stage >= 1 && <text x={W / 2} y={188} textAnchor="middle" fontFamily={mono} fontSize="13" fontWeight="700" fill={T.wire}>↓ all-reduce: add the bin counts ↓</text>}
-        {step.stage >= 1 && <Hist x={230} y={210} w={400} h={110} counts={pooled} lo={lo} hi={hi} thr={step.stage >= 2 ? thr : null} color={XC[ex]} hlBin={bi} title={`POOLED · EXPERT E${ex}`} />}
-        {step.stage === 0 && <Tex x={20} y={176} w={820} h={30} size={14} color={T.ink} tex={`\\mathrm{hist}_r[\\ell=${bi}]=${locals.map((h) => c(h[bi], ex)).join(",\\;")}\\quad(r=0,\\dots,${ranks - 1})`} />}
-        {step.stage === 1 && <Tex x={20} y={328} w={820} h={32} size={14} color={T.ink} tex={`\\mathrm{hist}[\\ell=${bi}]=\\sum_{r}\\mathrm{hist}_r[\\ell]=${locals.map((h) => c(h[bi], ex)).join("+")}=${c(pooled[bi], ex)}`} />}
+        {step.stage >= 1 && <Hist x={230} y={210} w={400} h={110} counts={pooledA} maxC={pooledMax} lo={lo} hi={hi} thr={step.stage >= 2 ? thr : null} color={XC[ex]} hlBin={bi} title={`POOLED · EXPERT E${ex}`} />}
+        {step.stage === 0 && <Tex x={20} y={176} w={820} h={30} size={14} color={T.ink} tex={`\\mathrm{hist}_r[\\ell=${bi}]=${locals.map((h) => c(Math.round(h[bi] * part()), ex)).join(",\\;")}\\quad(r=0,\\dots,${ranks - 1})`} />}
+        {step.stage === 1 && <Tex x={20} y={328} w={820} h={32} size={14} color={T.ink} tex={`\\mathrm{hist}[\\ell=${bi}]=\\sum_{r}\\mathrm{hist}_r[\\ell]=${locals.map((h) => c(h[bi], ex)).join("+")}=${c(Math.round(pooledA[bi]), ex)}`} />}
         {step.stage >= 2 && <Tex x={20} y={330} w={820} h={30} size={14} color={T.accent2} tex={`\\hat b_{\\mathrm{E}_{${ex}}}=-\\mathrm{quantile}_{q}(\\mathrm{hist})=-(${d2(thr)})=${c(d2(-thr), ex)}`} />}
         {step.stage >= 2 && <text x={20} y={376} fontFamily={mono} fontSize="11.5" fill={T.soft}>same quantile as sorting all {m} margins, up to bin width</text>}
         {step.stage >= 1 && <text x={20} y={402} fontFamily={mono} fontSize="11" fill={T.dim}>traffic = bins × experts, whatever the number of tokens or ranks</text>}
@@ -227,7 +245,8 @@ function Scene({ step, tok, ex, setEx }) {
     body = (
       <g>
         {sets.map(([t, b], i) => {
-          const l = loadsOf(route(B2, b));
+          const l1 = loadsOf(route(B2, b));
+          const l = i === 0 ? l1 : lerpArr(loadsOf(route(B2, Z)), l1, e); // bias switched on: s → s + b
           return (
             <g key={i}>
               <Bars x={20 + i * 285} y={80} w={255} h={190} values={l} ideal={MU} title={t} max={42} />
@@ -240,11 +259,14 @@ function Scene({ step, tok, ex, setEx }) {
     );
   } else {
     const t = step.t;
+    const prevT = SNAPS[SNAPS.indexOf(t) - 1] ?? 0;
+    const tn = Math.round(lerp(prevT, t, e)); // training advances from the last snapshot
+    const tl = (R) => lerpArr(R[prevT].loads, R[t].loads, e);
     body = (
       <g>
-        <Lines x={20} y={70} w={390} h={230} series={[{ pts: SIGN.map((q) => q.cv), color: T.wire, label: "sign step γ=0.01" }, { pts: QB.map((q) => q.cv), color: T.accent, label: "quantile" }]} ymax={1} upTo={t} title="LOAD CV (LOWER = BALANCED)" />
-        <Bars x={450} y={80} w={390} h={80} values={SIGN[t].loads} ideal={MU} title="SIGN STEP · LOAD NOW" max={40} />
-        <Bars x={450} y={220} w={390} h={80} values={QB[t].loads} ideal={MU} title="QUANTILE · LOAD NOW" max={40} />
+        <Lines x={20} y={70} w={390} h={230} series={[{ pts: SIGN.map((q) => q.cv), color: T.wire, label: "sign step γ=0.01" }, { pts: QB.map((q) => q.cv), color: T.accent, label: "quantile" }]} ymax={1} upTo={tn} title="LOAD CV (LOWER = BALANCED)" />
+        <Bars x={450} y={80} w={390} h={80} values={tl(SIGN)} ideal={MU} title="SIGN STEP · LOAD NOW" max={40} />
+        <Bars x={450} y={220} w={390} h={80} values={tl(QB)} ideal={MU} title="QUANTILE · LOAD NOW" max={40} />
         <text x={20} y={340} fontFamily={mono} fontSize="12" fill={T.soft}>CV below 0.3 after: sign step {firstBelow(SIGN, 0.3)} steps · quantile {firstBelow(QB, 0.3)} step</text>
         <text x={20} y={362} fontFamily={mono} fontSize="11" fill={T.dim}>the remaining ~0.2 is sampling noise of a {m}-token batch</text>
       </g>

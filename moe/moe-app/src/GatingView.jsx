@@ -37,7 +37,7 @@ export default function GatingView() {
       )}
       scene={(item) =>
         view === "tensor" ? <TensorView step={item} gm={gm} />
-          : item.scene === "group" ? <GroupScene gm={gm} stage={item.stage} loop={item.loop} />
+          : item.scene === "group" ? <GroupScene gm={gm} stage={item.stage} loop={item.loop} line={item.line} />
           : <DevicesScene stage={item.stage} sel={g} />
       }
       glossary={GLOSSARY}

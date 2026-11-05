@@ -3,17 +3,21 @@ import { T, mono } from "./theme";
 import DenseToMoEView from "./DenseToMoEView";
 import GatingView from "./GatingView";
 import A2AView from "./A2AView";
+import EplbView from "./EplbView";
 import DeepSeekView from "./DeepSeekView";
 import KimiView from "./KimiView";
 import CompareView from "./CompareView";
+import RouterZLossView from "./RouterZLossView";
 
 const VIEWS = [
   { id: "dense", label: "Dense → MoE", sub: "set sparsity, watch the FFN split into experts", C: DenseToMoEView },
   { id: "gating", label: "MoE layer", sub: "top-2 gating · balance · sharding", C: GatingView },
   { id: "a2a", label: "All-to-all", sub: "the collective behind dispatch / combine", C: A2AView },
+  { id: "eplb", label: "EPLB placement", sub: "where experts live · hot ones get copies", C: EplbView },
   { id: "ds", label: "DeepSeek-V3 balancing", sub: "aux loss → loss-free bias", C: DeepSeekView },
   { id: "kimi", label: "Kimi K3 balancing", sub: "quantile-based bias", C: KimiView },
   { id: "compare", label: "DeepSeek vs Kimi", sub: "the two balancing methods side by side", C: CompareView },
+  { id: "zloss", label: "Router z-loss", sub: "keep router logits small and bf16-safe", C: RouterZLossView },
 ];
 
 export default function App() {

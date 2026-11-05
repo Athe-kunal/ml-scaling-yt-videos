@@ -6,6 +6,7 @@ import Stepper from "./Stepper";
 import { DS_GLOSSARY, DS_SHAPES, DEV_GLOSSARY, DEV_SHAPES } from "./lbShapes";
 import { DEV, devOf, devScores, routeDev } from "./devRoute";
 import { Tex } from "./tex";
+import { useProgress, ease, lerp, clamp01, logit } from "./anim";
 
 // DeepSeek-V3 (arXiv 2412.19437, §2.1.2): sigmoid router, auxiliary balance loss
 // (eq. 17-20, sequence-wise), then auxiliary-loss-free balancing:
@@ -85,7 +86,61 @@ const STEPS = [
   { id: "recipe", block: "recipe", lines: [0, 1], visAt: 0, scene: "recipe", caption: "bias balances batches, tiny loss guards each sequence", vars: () => [["tokens dropped", "0"]] },
 ];
 
-function Heat({ scores, rt, base, stage, bias }) {
+// point on the cubic lane used by the shuffle paths (control y fixed at 190)
+const lane = (x0, y0, x1, y1, t) => {
+  const u = 1 - t;
+  return [u * u * u * x0 + 3 * u * u * t * x0 + 3 * u * t * t * x1 + t * t * t * x1, u * u * u * y0 + 3 * u * u * t * 190 + 3 * u * t * t * 190 + t * t * t * y1];
+};
+
+// sigmoid curve: the 8 logits of token x0 rise from the axis onto the curve
+function Sigmoid({ x, y, w, h, zs, e }) {
+  const px = (z) => x + ((z + 4) / 8) * w, py = (v) => y + h - v * h;
+  const pts = Array.from({ length: 41 }, (_, i) => { const z = -4 + (i / 40) * 8; return `${i ? "L" : "M"}${px(z)},${py(1 / (1 + Math.exp(-z)))}`; }).join(" ");
+  return (
+    <g>
+      <text x={x} y={y - 12} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim}>ROW x0 · LOGIT z → SCORE s</text>
+      <rect x={x} y={y} width={w} height={h} fill={T.well} stroke={T.rule} rx={4} />
+      <line x1={px(0)} x2={px(0)} y1={y} y2={y + h} stroke={T.rule} strokeDasharray="2 3" />
+      <line x1={x} x2={x + w} y1={py(0.5)} y2={py(0.5)} stroke={T.rule} strokeDasharray="2 3" />
+      <path d={pts} fill="none" stroke={T.dim} strokeWidth={1.6} />
+      {zs.map((z, j) => (
+        <g key={j}>
+          <line x1={px(z)} x2={px(z)} y1={y + h} y2={py(e / (1 + Math.exp(-z)))} stroke={XC[j]} strokeWidth={1.2} strokeDasharray="2 2" opacity={0.7} />
+          <circle cx={px(z)} cy={py((e * 1) / (1 + Math.exp(-z)))} r={5} fill={XC[j]} stroke={T.bg} />
+        </g>
+      ))}
+      <text x={x + 6} y={y + 14} fontFamily={mono} fontSize="10" fill={T.dim}>s = 1</text>
+      <text x={x + w - 6} y={y + h + 14} textAnchor="end" fontFamily={mono} fontSize="10" fill={T.dim}>z →</text>
+      <Tex x={x} y={y + h + 20} w={w} h={30} size={13} color={T.soft} tex={`s=\\sigma(z)=\\dfrac{1}{1+e^{-z}}`} />
+    </g>
+  );
+}
+
+// f_i × P_i as an AREA: width = P_i, height = f_i, so the rectangle's area is the product
+function AreaModel({ x, y, w, h, f, P, hl, onPick, e }) {
+  const sp = P.reduce((a, v) => a + v, 0), mf = Math.max(...f);
+  let cx = x;
+  return (
+    <g>
+      <text x={x} y={y - 10} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim}>f_i × P_i = AREA (WIDTH P, HEIGHT f)</text>
+      <rect x={x} y={y} width={w} height={h} fill={T.well} stroke={T.rule} rx={4} />
+      {P.map((pj, j) => {
+        const wj = (pj / sp) * w, hj = (f[j] / mf) * (h - 14) * e, xj = cx;
+        cx += wj;
+        return (
+          <g key={j}>
+            <rect x={xj + 1} y={y + h - hj} width={Math.max(wj - 2, 1)} height={Math.max(hj, 0.5)} rx={2} fill={XC[j]} fillOpacity={0.85} stroke={hl === j ? T.ink : "none"} strokeWidth={2.2} />
+            {e > 0.95 && wj > 20 && f[j] * pj >= 0.03 && <text x={xj + wj / 2} y={y + h - hj - 4} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={hl === j ? T.ink : T.soft}>{f2(f[j] * pj)}</text>}
+            <text x={xj + wj / 2} y={y + h + 14} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={XC[j]}>E{j}</text>
+            {onPick && <rect x={xj} y={y} width={wj} height={h} fill="transparent" style={{ cursor: "pointer" }} onClick={() => onPick(j)} />}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function Heat({ scores, rt, base, stage, bias, e = 1 }) {
   const x0 = 50, cw = 50, ch = 19, y0 = 56;
   return (
     <g>
@@ -93,7 +148,7 @@ function Heat({ scores, rt, base, stage, bias }) {
         <text key={j} x={x0 + j * cw + cw / 2 - 2} y={y0 - 10} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={XC[j]}>E{j}</text>
       ))}
       {bias && Array.from({ length: n }, (_, j) => {
-        const v = bias[j], hh = Math.min(12, Math.abs(v) * 110);
+        const v = bias[j] * e, hh = Math.min(12, Math.abs(v) * 110);
         const base = y0 - 30;
         return <rect key={j} x={x0 + j * cw + 6} y={v >= 0 ? base - hh : base} width={cw - 14} height={Math.max(hh, 1)} rx={2} fill={v >= 0 ? T.accent : T.bad} opacity={0.85} />;
       })}
@@ -107,17 +162,23 @@ function Heat({ scores, rt, base, stage, bias }) {
               const on = sel.includes(j);
               const was = base ? base[t].sel.includes(j) : on;
               const flip = base && on !== was;
-              const show = stage === 0 || on || bias;
+              const topkAnim = stage === 1 && !bias;
+              const show = stage === 0 || on || bias || (topkAnim && e < 1);
+              // the variable as the current line changes it
+              let shown = s, tint = s;
+              if (stage === 0) { shown = lerp(logit(s), s, e); tint = lerp(0.35, s, e); } // logit z → sigmoid(z)
+              else if (stage === 1.5 && on && !bias) shown = lerp(s, s / gsum, e); // s → s / Σ s_sel
+              else if (bias) shown = s + e * bias[j]; // s → s + b
               return (
-                <g key={j} opacity={stage >= 1 && !on ? 0.28 : 1} style={{ transition: "opacity .4s" }}>
+                <g key={j} opacity={stage >= 1 && !on ? (topkAnim ? lerp(1, 0.28, e) : bias ? 0.28 : 0.28) : 1} transform={topkAnim && on ? `translate(0,${-2 * e})` : undefined}>
                   <rect
                     x={x0 + j * cw} y={y0 + t * ch} width={cw - 3} height={ch - 3} rx={3}
-                    fill={`color-mix(in srgb, ${XC[j]} ${Math.round(s * 80)}%, ${T.well})`}
-                    stroke={flip ? (on ? T.accent2 : T.wire) : on && stage >= 1 ? T.ink : "none"} strokeWidth={flip ? 2.2 : 1.4} strokeDasharray={flip && !on ? "3 2" : "none"}
+                    fill={`color-mix(in srgb, ${XC[j]} ${Math.round(tint * 80)}%, ${T.well})`}
+                    stroke={flip ? (on ? T.accent2 : T.wire) : on && stage >= 1 ? T.ink : "none"} strokeWidth={flip ? 2.2 : 1.4} strokeOpacity={topkAnim && on ? e : 1} strokeDasharray={flip && !on ? "3 2" : "none"}
                   />
                   {show && (
-                    <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + t * ch + 12} textAnchor="middle" fontFamily={mono} fontSize={stage >= 1.5 && on && !bias ? 8.5 : 9.5} fontWeight="600" fill={T.ink}>
-                      {stage >= 1.5 && on && !bias ? `${f2(s)}→${f2(s / gsum)}` : f2(s)}
+                    <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + t * ch + 12} textAnchor="middle" fontFamily={mono} fontSize={stage >= 1.5 && on && !bias ? 8.5 : 9.5} fontWeight="600" fill={T.ink} opacity={topkAnim && !on ? clamp01(1 - 2 * e) : 1}>
+                      {stage >= 1.5 && on && !bias ? `${f2(s)}→${f2(shown)}` : f2(shown)}
                     </text>
                   )}
                 </g>
@@ -131,7 +192,7 @@ function Heat({ scores, rt, base, stage, bias }) {
 }
 
 // Token x0 worked through: which experts top-K keeps, and how their gates come out.
-function Worked({ rt, stage }) {
+function Worked({ rt, stage, e = 1 }) {
   const row = SEQ[0], sel = rt[0].sel;
   const v = (j) => f2(row[j]);
   const sum = sel.reduce((a, j) => a + row[j], 0);
@@ -149,6 +210,17 @@ function Worked({ rt, stage }) {
           <Tex x={470} y={166} w={380} h={30} size={14} color={T.ink} tex={`\\mathrm{idx}=\\operatorname{TopK}(s,\\,K=${k})=\\{${names}\\}`} />
           <Tex x={470} y={200} w={380} h={30} size={13} color={T.soft} tex={`${vals}`} />
           <Tex x={470} y={234} w={380} h={30} size={12} color={T.dim} tex={`\\text{the other ${n - k} scores are dropped}`} />
+          <text x={470} y={280} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim} opacity={e}>SELECTED SCORES → GATE ROW</text>
+          {sel.map((j, i) => {
+            const fx = 50 + j * 50, fy = 56 + 1, tx = 470 + i * 72, ty = 288;
+            return (
+              <g key={j}>
+                <rect x={tx} y={ty} width={47} height={16} rx={3} fill="none" stroke={T.rule} strokeDasharray="2 3" />
+                <rect x={lerp(fx, tx, e)} y={lerp(fy, ty, e)} width={47} height={16} rx={3} fill={`color-mix(in srgb, ${XC[j]} ${Math.round(row[j] * 80)}%, ${T.well})`} stroke={T.ink} strokeWidth={1.4} />
+                <text x={lerp(fx, tx, e) + 23.5} y={lerp(fy, ty, e) + 12} textAnchor="middle" fontFamily={mono} fontSize="9.5" fontWeight="600" fill={T.ink}>{f2(row[j])}</text>
+              </g>
+            );
+          })}
         </g>
       )}
       {stage === 1.5 && (
@@ -164,6 +236,8 @@ function Worked({ rt, stage }) {
 }
 
 function Scene({ step, ex, setEx }) {
+  const p = useProgress(step.id); // 0 → 1 each time a new picture arrives
+  const e = ease(p);
   const rt0 = route(SEQ, ZERO);
   const mu = (LB.m * k) / n;
   let body = null;
@@ -171,14 +245,15 @@ function Scene({ step, ex, setEx }) {
   if (step.scene === "heat") {
     body = (
       <g>
-        <Heat scores={SEQ} rt={rt0} stage={step.stage} />
+        <Heat scores={SEQ} rt={rt0} stage={step.stage} e={e} />
+        {step.stage === 0 && <Sigmoid x={480} y={90} w={350} h={190} zs={SEQ[0].map(logit)} e={e} />}
         {step.stage === 2 && (
           <g>
-            <Bars x={500} y={90} w={330} h={220} values={AUX.cnt} ideal={(TT * k) / n} title="TOKENS PER EXPERT" flag={AUX.cnt.map((c, j) => (c > 2 * ((TT * k) / n) ? j : -1)).filter((j) => j >= 0)} />
+            <Bars x={500} y={90} w={330} h={220} values={AUX.cnt.map((v) => v * e)} ideal={(TT * k) / n} fmt={(v) => v.toFixed(0)} max={Math.max(...AUX.cnt) * 1.12} title="TOKENS PER EXPERT" flag={AUX.cnt.map((c, j) => (c > 2 * ((TT * k) / n) ? j : -1)).filter((j) => j >= 0)} />
             <text x={500} y={355} fontFamily={mono} fontSize="11" fill={T.dim}>E0 and E1 take {AUX.cnt[0] + AUX.cnt[1]} of {TT * k} routes</text>
           </g>
         )}
-        {step.stage >= 1 && step.stage < 2 && <Worked rt={rt0} stage={step.stage} />}
+        {step.stage >= 1 && step.stage < 2 && <Worked rt={rt0} stage={step.stage} e={e} />}
         {step.stage >= 1 && step.stage < 2 && <text x={500} y={120} fontFamily={mono} fontSize="11.5" fill={T.soft}>ringed = chosen{step.stage >= 1.5 ? " · in a cell: score s → gate g" : ""}</text>}
       </g>
     );
@@ -192,9 +267,9 @@ function Scene({ step, ex, setEx }) {
     const E = `\\mathrm{E}_{${ex}}`;
     body = (
       <g>
-        <Bars x={20} y={70} w={250} h={180} values={AUX.f} ideal={1} fmt={f2} title="f_i  (FRACTION ROUTED)" hl={ex} onPick={setEx} flag={AUX.f.map((v, j) => (v > 1.5 ? j : -1)).filter((j) => j >= 0)} />
-        {st >= 1 && <Bars x={305} y={70} w={250} h={180} values={AUX.P} ideal={1 / n} fmt={f2} title="P_i  (MEAN SOFT SCORE)" hl={ex} onPick={setEx} arrows={st >= 2 ? AUX.f.map((v) => (v > 1 ? -1 : 0)) : null} />}
-        {st >= 2 && <Bars x={590} y={70} w={250} h={180} values={AUX.prod} ideal={1 / n} fmt={f2} title="f_i · P_i" hl={ex} onPick={setEx} />}
+        <Bars x={20} y={70} w={250} h={180} values={AUX.f.map((v) => v * (st === 0 ? e : 1))} max={Math.max(...AUX.f) * 1.12} ideal={1} fmt={f2} title="f_i  (FRACTION ROUTED)" hl={ex} onPick={setEx} flag={AUX.f.map((v, j) => (v > 1.5 ? j : -1)).filter((j) => j >= 0)} />
+        {st >= 1 && <Bars x={305} y={70} w={250} h={180} values={AUX.P.map((v) => v * (st === 1 ? e : 1))} max={Math.max(...AUX.P) * 1.12} ideal={1 / n} fmt={f2} title="P_i  (MEAN SOFT SCORE)" hl={ex} onPick={setEx} arrows={st >= 2 ? AUX.f.map((v) => (v > 1 ? -1 : 0)) : null} />}
+        {st >= 2 && <AreaModel x={590} y={70} w={250} h={180} f={AUX.f} P={AUX.P} hl={ex} onPick={setEx} e={e} />}
         <Tex x={20} y={284} w={820} h={42} size={14} color={T.ink} tex={`f_{${E}}=\\dfrac{N}{K\\,T}\\,n_{${E}}=\\dfrac{${n}}{${k}\\cdot ${TT}}\\cdot ${c(AUX.cnt[ex])}=${c(d2(AUX.f[ex]))}`} />
         {st >= 1 && <Tex x={20} y={330} w={840} h={42} size={14} color={T.ink} tex={`P_{${E}}=\\dfrac{1}{T}\\sum_{t=1}^{T}\\dfrac{s_{${E},t}}{\\sum_{j} s_{j,t}}=\\dfrac{1}{${TT}}\\Big(${term(0)}+${term(1)}+\\cdots+${term(TT - 1)}\\Big)=\\dfrac{${c(d2(AUX.P[ex] * TT))}}{${TT}}=${c(d2(AUX.P[ex]))}`} />}
         {st >= 2 && <Tex x={20} y={376} w={840} h={28} size={14} color={T.accent2} tex={`f_{${E}}P_{${E}}=${d2(AUX.f[ex])}\\cdot ${d2(AUX.P[ex])}=${c(d2(AUX.prod[ex]))}\\qquad L_{\\mathrm{bal}}=\\alpha\\sum_{i} f_i P_i=\\alpha\\,(\\cdots+${c(d2(AUX.prod[ex]))}+\\cdots)=\\alpha\\cdot ${d2(AUX.loss)}`} />}
@@ -207,9 +282,9 @@ function Scene({ step, ex, setEx }) {
     const lb = loadsOf(rb);
     body = (
       <g>
-        <Heat scores={SEQ} rt={rb} base={rt0} stage={1} bias={BIAS_DEMO} />
+        <Heat scores={SEQ} rt={rb} base={rt0} stage={1} bias={BIAS_DEMO} e={e} />
         <text x={50} y={10} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim}>BIAS b_j (ABOVE) · SELECT BY s + b</text>
-        <Bars x={500} y={90} w={330} h={190} values={lb} ideal={(TT * k) / n} title="TOKENS PER EXPERT WITH BIAS" />
+        <Bars x={500} y={90} w={330} h={190} values={loadsOf(rt0).map((v, j) => lerp(v, lb[j], e))} ideal={(TT * k) / n} fmt={(v) => v.toFixed(0)} max={Math.max(...loadsOf(rt0), ...lb) * 1.12} title="TOKENS PER EXPERT WITH BIAS" />
         <g fontFamily={mono} fontSize="11" fill={T.soft}>
           <text x={500} y={330}><tspan fill={T.accent2}>▢</tspan> newly chosen because of b</text>
           <text x={500} y={350}><tspan fill={T.wire}>⬚</tspan> dropped because of b</text>
@@ -221,7 +296,7 @@ function Scene({ step, ex, setEx }) {
     const l = SIM[0].loads;
     body = (
       <g>
-        <Bars x={40} y={70} w={520} h={250} values={l} ideal={mu} title={`TOKENS PER EXPERT · ONE BATCH OF ${LB.m}`} flag={l.map((v, j) => (v > mu ? j : -1)).filter((j) => j >= 0)} />
+        <Bars x={40} y={70} w={520} h={250} values={l.map((v) => v * e)} max={Math.max(...l) * 1.12} fmt={(v) => v.toFixed(0)} ideal={mu} title={`TOKENS PER EXPERT · ONE BATCH OF ${LB.m}`} flag={l.map((v, j) => (v > mu ? j : -1)).filter((j) => j >= 0)} />
         <g fontFamily={mono} fontSize="11.5" fill={T.soft}>
           <text x={600} y={120} fill={T.bad}>red ring = overloaded</text>
           <text x={600} y={144} fill={T.accent}>no ring = underloaded</text>
@@ -238,10 +313,30 @@ function Scene({ step, ex, setEx }) {
     const c = (x) => `{\\color{${col}}\\mathbf{${x}}}`; // the numbers to point at, coloured like the expert's bars
     const E = `\\mathrm{E}_{${ex}}`;
     const sg = Math.sign(err[ex]);
+    const maxL = Math.max(...l), maxE = Math.max(...err.map(Math.abs));
+    const e1 = ease(clamp01(p / 0.5)), e2 = ease(clamp01((p - 0.5) / 0.5));
+    let left, leftTitle, leftMax, leftMin, ideal;
+    if (step.stage === 0) {
+      // load_j → load_j − mean (slide down by the mean) → mean − load_j (flip)
+      left = l.map((v) => (v - e1 * mu) * (1 - 2 * e2));
+      leftTitle = e2 > 0 ? "err_j = mean − load_j" : e1 > 0 ? "load_j − mean" : "load_j  (TOKENS PER EXPERT)";
+      leftMax = maxL * 1.1; leftMin = -maxL * 0.8;
+      ideal = e2 === 0 ? mu * (1 - e1) : undefined;
+    } else {
+      // err_j → sign(err_j): every bar collapses to the same height, only the direction survives
+      left = err.map((v) => lerp(v, Math.sign(v) * maxE * 0.55, e1));
+      leftTitle = e1 > 0.5 ? "sign(err_j)" : "err_j";
+      leftMax = maxE * 1.1; leftMin = -maxE * 0.9;
+    }
+    const settled = p >= 1;
     body = (
       <g>
-        <Bars x={30} y={70} w={380} h={220} values={err} fmt={(v) => v.toFixed(0)} title="err_j = mean load − load_j" arrows={err.map((v) => Math.sign(v))} hl={ex} onPick={setEx} />
-        {step.stage >= 1 && <Bars x={450} y={70} w={380} h={220} values={b1} min={-GAMMA * 1.5} max={GAMMA * 1.5} fmt={(v) => v.toFixed(3)} title="NEW BIAS b_j  (STARTED AT 0)" hl={ex} onPick={setEx} />}
+        <Bars
+          x={30} y={70} w={380} h={220} values={left} fmt={step.stage === 0 ? (v) => v.toFixed(0) : () => ""} title={leftTitle} max={leftMax} min={leftMin}
+          ideal={ideal} idealLabel="mean" arrows={step.stage === 0 && settled ? err.map((v) => Math.sign(v)) : null} hl={ex} onPick={setEx}
+        />
+        {step.stage >= 1 && <Bars x={450} y={70} w={380} h={220} values={b1.map((v) => v * e2)} min={-GAMMA * 1.5} max={GAMMA * 1.5} fmt={(v) => v.toFixed(3)} title="NEW BIAS b_j  (STARTED AT 0)" hl={ex} onPick={setEx} />}
+        {step.stage >= 1 && <text x={420} y={190} textAnchor="middle" fontFamily={mono} fontSize="12" fill={T.wire}>× γ</text>}
         <Tex x={30} y={328} w={820} h={28} size={14} color={T.ink} tex={`\\mathrm{err}_{${E}}=\\bar\\ell-\\ell_{${E}}=${mu}-${c(l[ex])}=${c(err[ex])}\\qquad\\bar\\ell=\\dfrac{${LB.m}\\cdot ${k}}{${n}}=${mu}\\text{ (fair share)}`} />
         {step.stage >= 1 && <Tex x={30} y={358} w={820} h={28} size={14} color={T.accent2} tex={`b_{${E}}\\leftarrow b_{${E}}+\\gamma\\,\\mathrm{sign}(\\mathrm{err}_{${E}})=0+${GAMMA}\\cdot(${c(sg)})=${c((sg * GAMMA).toFixed(3))}`} />}
         <Tex x={30} y={392} w={820} h={24} size={11.5} color={T.dim} tex={step.stage === 0 ? `\\mathrm{err}>0:\\text{ underloaded}\;(\\uparrow\\text{ raise }b)\\qquad \\mathrm{err}<0:\\text{ overloaded}\;(\\downarrow\\text{ lower }b)` : `\\gamma\\text{ is fixed: a mild or a huge imbalance moves }b\\text{ by the same }\\pm${GAMMA}`} />
@@ -249,10 +344,12 @@ function Scene({ step, ex, setEx }) {
     );
   } else if (step.scene === "loop") {
     const r = SIM[step.t];
+    const pr = SIM[SNAPS[SNAPS.indexOf(step.t) - 1] ?? 0]; // the snapshot before this one
+    const mix = (a, b) => a.map((v, j) => lerp(v, b[j], e));
     body = (
       <g>
-        <Bars x={20} y={70} w={260} h={190} values={r.loads} ideal={mu} title="LOAD THIS STEP" />
-        <Bars x={305} y={70} w={260} h={190} values={r.b} min={-0.3} max={0.3} fmt={(v) => f2(v)} title="BIAS b_j" />
+        <Bars x={20} y={70} w={260} h={190} values={mix(pr.loads, r.loads)} ideal={mu} title="LOAD THIS STEP" />
+        <Bars x={305} y={70} w={260} h={190} values={mix(pr.b, r.b)} min={-0.3} max={0.3} fmt={(v) => f2(v)} title="BIAS b_j" />
         <Lines x={600} y={70} w={240} h={190} series={[{ pts: SIM.map((q) => q.cv), color: T.accent2, label: "load CV" }]} ymax={1} upTo={step.t} title="IMBALANCE OVER TIME" />
         <text x={20} y={310} fontFamily={mono} fontSize="12" fill={T.soft}>step {step.t} · bias of popular experts sinks, rare ones rise</text>
         <text x={20} y={334} fontFamily={mono} fontSize="11" fill={T.dim}>γ = {GAMMA} here; the paper uses 0.001 over many more steps</text>
@@ -261,6 +358,7 @@ function Scene({ step, ex, setEx }) {
   } else if (step.scene === "devroute") {
     const st = step.stage, rr = RR[0], ru = RU[0], row = DSC[0];
     const DX = (d) => 20 + d * 210, bx = (e) => DX(devOf(e)) + 22 + (e % DEV.Ed) * 52, BASE = 232, SC = 130;
+    const maxDs = Math.max(...rr.devScore);
     const keepSet = new Set(rr.keep), feeds = new Set(rr.top.flat()), chosen = new Set(rr.idx), ghost = new Set(ru.idx);
     body = (
       <g>
@@ -268,11 +366,12 @@ function Scene({ step, ex, setEx }) {
         {Array.from({ length: DEV.D }, (_, d) => {
           const kept = keepSet.has(d), out = st >= 1 && !kept;
           return (
-            <g key={d} opacity={out ? 0.35 : 1} style={{ transition: "opacity .5s" }}>
+            <g key={d} opacity={out ? (st === 1 ? lerp(1, 0.35, e) : 0.35) : 1}>
               <rect x={DX(d)} y={50} width={190} height={226} rx={10} fill={T.panel} stroke={st >= 1 && kept ? T.accent : T.rule} strokeWidth={st >= 1 && kept ? 2.2 : 1.2} />
               <text x={DX(d) + 12} y={72} fontFamily={mono} fontSize="12.5" fontWeight="700" fill={T.ink}>Device {d}</text>
+              <rect x={DX(d) + 12} y={79} width={166 * (rr.devScore[d] / maxDs) * (st === 0 ? e : 1)} height={5} rx={2.5} fill={kept || st < 1 ? T.accent : T.bad} opacity={0.8} />
               <text x={DX(d) + 178} y={72} textAnchor="end" fontFamily={mono} fontSize="11.5" fontWeight="700" fill={st >= 1 ? (kept ? T.accent : T.bad) : T.wire}>
-                {st === 0 ? `Σ = ${f2(rr.devScore[d])}` : kept ? `Σ ${f2(rr.devScore[d])} ✓` : `Σ ${f2(rr.devScore[d])} ✕`}
+                {st === 0 ? `Σ = ${f2(rr.devScore[d] * e)}` : kept ? `Σ ${f2(rr.devScore[d])} ✓` : `Σ ${f2(rr.devScore[d])} ✕`}
               </text>
             </g>
           );
@@ -281,13 +380,16 @@ function Scene({ step, ex, setEx }) {
           const d = devOf(e), h = v * SC, x = bx(e);
           const masked = st >= 2 && !keepSet.has(d);
           const lit = st === 0 ? feeds.has(e) : st >= 3 ? chosen.has(e) : !masked;
+          const litNow = lit ? 0.95 : 0.32;
+          const litOp = st === 0 ? lerp(0.6, litNow, e) : st === 3 ? lerp(!masked ? 0.95 : 0.32, litNow, e) : litNow;
+          const grpOp = masked ? (st === 2 ? lerp(1, 0.2, e) : st >= 3 && ghost.has(e) ? lerp(0.2, 0.55, e) : 0.2) : 1;
           return (
-            <g key={e} opacity={masked ? (st >= 3 && ghost.has(e) ? 0.55 : 0.2) : 1} style={{ transition: "opacity .5s" }}>
-              <rect x={x} y={BASE - h} width={40} height={h} rx={4} fill={XC[d]} opacity={lit ? 0.95 : 0.32} stroke={st === 0 && feeds.has(e) ? T.ink : "none"} strokeWidth={1.6} />
+            <g key={e} opacity={grpOp}>
+              <rect x={x} y={BASE - h} width={40} height={h} rx={4} fill={XC[d]} opacity={litOp} stroke={st === 0 && feeds.has(e) ? T.ink : "none"} strokeWidth={1.6} />
               <text x={x + 20} y={BASE - h - 5} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={T.soft}>{f2(v)}</text>
               <text x={x + 20} y={BASE + 14} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={XC[d]}>E{e}</text>
               {st >= 3 && chosen.has(e) && <text x={x + 20} y={BASE + 30} textAnchor="middle" fontFamily={mono} fontSize="10" fill={T.accent}>✓ g {f2(rr.g[rr.idx.indexOf(e)])}</text>}
-              {st >= 3 && ghost.has(e) && !chosen.has(e) && <text x={x + 20} y={BASE - h - 17} textAnchor="middle" fontFamily={mono} fontSize="10" fill={T.bad}>▽</text>}
+              {st >= 3 && ghost.has(e) && !chosen.has(e) && <text x={x + 20} y={BASE - h - 17} textAnchor="middle" fontFamily={mono} fontSize="10" fill={T.bad} opacity={e}>▽</text>}
               {masked && <text x={x + 20} y={BASE - h / 2} textAnchor="middle" fontFamily={mono} fontSize="16" fill={T.bad}>×</text>}
             </g>
           );
@@ -320,14 +422,14 @@ function Scene({ step, ex, setEx }) {
           <g key={`d${d}`}>
             <rect x={DX(d)} y={DY} width={190} height={92} rx={10} fill={T.panel} stroke={st >= 2 ? T.accent : T.rule} style={{ transition: "stroke .4s" }} />
             <text x={DX(d) + 10} y={DY + 15} fontFamily={mono} fontSize="10" fill={T.dim}>device {d} · experts</text>
-            {st >= 1 && <text x={DX(d) + 180} y={DY + 15} textAnchor="end" fontFamily={mono} fontSize="10.5" fontWeight="700" fill={T.wire}>recv {recv[d]}</text>}
+            {st >= 1 && <text x={DX(d) + 180} y={DY + 15} textAnchor="end" fontFamily={mono} fontSize="10.5" fontWeight="700" fill={T.wire}>recv {st === 1 ? Math.round(recv[d] * e) : recv[d]}</text>}
             {Array.from({ length: DEV.Ed }, (_, j) => {
               const e = d * DEV.Ed + j;
               return (
                 <g key={e}>
-                  <rect x={DX(d) + 10 + j * 59} y={DY + 30} width={52} height={50} rx={6} fill={XC[d]} opacity={st >= 2 ? (expAt[e] ? 0.9 : 0.2) : 0.3} style={{ transition: "opacity .5s" }} />
+                  <rect x={DX(d) + 10 + j * 59} y={DY + 30} width={52} height={50} rx={6} fill={XC[d]} opacity={st === 2 ? lerp(0.3, expAt[e] ? 0.9 : 0.2, e) : st > 2 ? (expAt[e] ? 0.9 : 0.2) : 0.3} />
                   <text x={DX(d) + 36 + j * 59} y={DY + 52} textAnchor="middle" fontFamily={mono} fontSize="11" fontWeight="700" fill={T.bg}>E{e}</text>
-                  {st >= 2 && <text x={DX(d) + 36 + j * 59} y={DY + 68} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={T.bg}>{expAt[e]} tok</text>}
+                  {st >= 2 && <text x={DX(d) + 36 + j * 59} y={DY + 68} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={T.bg}>{st === 2 ? Math.round(expAt[e] * e) : expAt[e]} tok</text>}
                 </g>
               );
             })}
@@ -337,18 +439,26 @@ function Scene({ step, ex, setEx }) {
           <g key={`t${t}`}>
             <circle cx={CX(t)} cy={SY} r={15} fill={XC[t % 8]} />
             <text x={CX(t)} y={SY + 4} textAnchor="middle" fontFamily={mono} fontSize="11" fontWeight="700" fill={T.bg}>x{t}</text>
-            {st === 0 && <text x={CX(t)} y={SY + 30} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={T.soft}>→ D{RR[t].devs.join(" D")}</text>}
+            {st === 0 && <text x={CX(t)} y={SY + 30} textAnchor="middle" fontFamily={mono} fontSize="9.5" fill={T.soft} opacity={e}>→ D{RR[t].devs.join(" D")}</text>}
           </g>
         ))}
         {st >= 1 && st !== 2 && DSC.map((_, t) => (
           <g key={`l${t}`}>
             {RU[t].devs.filter((d) => !RR[t].devs.includes(d)).map((d) => (
-              <path key={`g${d}`} d={`M${CX(t)},${SY + 16} C${CX(t)},190 ${endX(t, d)},190 ${endX(t, d)},${DY}`} fill="none" stroke={T.bad} strokeWidth={1.1} strokeDasharray="3 4" opacity={st === 1 ? 0.45 : 0} />
+              <path key={`g${d}`} d={`M${CX(t)},${SY + 16} C${CX(t)},190 ${endX(t, d)},190 ${endX(t, d)},${DY}`} fill="none" stroke={T.bad} strokeWidth={1.1} strokeDasharray="3 4" opacity={st === 1 ? 0.45 * e : 0} />
             ))}
             {RR[t].devs.map((d) => {
               const local = d === srcDev(t);
               const dd = st >= 3 ? `M${endX(t, d)},${DY} C${endX(t, d)},190 ${CX(t)},190 ${CX(t)},${SY + 16}` : `M${CX(t)},${SY + 16} C${CX(t)},190 ${endX(t, d)},190 ${endX(t, d)},${DY}`;
-              return <path key={d} d={dd} fill="none" stroke={st >= 3 ? T.accent2 : XC[t % 8]} strokeWidth={local ? 1.2 : 1.8} strokeDasharray={local ? "2 4" : undefined} opacity={local ? 0.4 : 0.75} className={local ? undefined : st >= 3 ? "lane back" : "lane"} />;
+              const [x1, y1] = st >= 3 ? [endX(t, d), DY] : [CX(t), SY + 16];
+              const [x2, y2] = st >= 3 ? [CX(t), SY + 16] : [endX(t, d), DY];
+              const [qx, qy] = lane(x1, y1, x2, y2, st === 2 ? 1 : e); // the copy rides its lane
+              return (
+                <g key={d}>
+                  <path d={dd} fill="none" stroke={st >= 3 ? T.accent2 : XC[t % 8]} strokeWidth={local ? 1.2 : 1.8} strokeDasharray={local ? "2 4" : undefined} opacity={local ? 0.4 : 0.75} className={local ? undefined : st >= 3 ? "lane back" : "lane"} />
+                  <circle cx={qx} cy={qy} r={local ? 3 : 4.5} fill={st >= 3 ? T.accent2 : XC[t % 8]} stroke={T.bg} />
+                </g>
+              );
             })}
           </g>
         ))}
@@ -369,9 +479,9 @@ function Scene({ step, ex, setEx }) {
     );
     body = (
       <g>
-        {card(30, 60, T.accent, "bias b_i", "balances the whole batch", "no gradient · cannot hurt the LM loss")}
-        {card(450, 60, T.accent2, "L_bal · tiny α", "stops extreme imbalance", "inside any single sequence")}
-        <text x={30} y={280} fontFamily={mono} fontSize="12.5" fill={T.soft}>result: balanced load without dropping tokens (train or inference)</text>
+        <g opacity={ease(clamp01(p / 0.5))} transform={`translate(0,${(1 - ease(clamp01(p / 0.5))) * 14})`}>{card(30, 60, T.accent, "bias b_i", "balances the whole batch", "no gradient · cannot hurt the LM loss")}</g>
+        <g opacity={ease(clamp01((p - 0.3) / 0.5))} transform={`translate(0,${(1 - ease(clamp01((p - 0.3) / 0.5))) * 14})`}>{card(450, 60, T.accent2, "L_bal · tiny α", "stops extreme imbalance", "inside any single sequence")}</g>
+        <text x={30} y={280} fontFamily={mono} fontSize="12.5" fill={T.soft} opacity={ease(clamp01((p - 0.6) / 0.4))}>result: balanced load without dropping tokens (train or inference)</text>
       </g>
     );
   }

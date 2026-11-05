@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ease, lerp } from "./anim";
 import { T, mono, btn } from "./theme";
 import { Tex } from "./tex";
 
@@ -51,11 +52,65 @@ function gridRects(n, box, gap) {
 // one rect per expert for the stage (index 0..s-1 shared, then routed)
 function expertRects(stage, N, s) {
   const n = N + s;
-  if (stage === 0) return [];
+  if (stage === 0) return Array.from({ length: n }, () => ({ x: AREA.x + AREA.w / 2, y: MID, w: 0, h: 0 })); // collapsed inside the dense matrices
   if (stage === 1) return gridRects(n, AREA, GAP);
   const shared = s ? gridRects(s, { x: AREA.x, y: AREA.y, w: AREA.w, h: SH_H }, GAP) : [];
   const routed = gridRects(N, { x: AREA.x, y: ROUTED_Y, w: AREA.w, h: AREA.y + AREA.h - ROUTED_Y }, GAP);
   return [...shared, ...routed];
+}
+
+// tween a bag of numbers toward `target`; every change restarts from the value currently on screen
+function useTweenNums(target, ms = 850) {
+  const sig = JSON.stringify(target);
+  const [v, setV] = useState(target);
+  const cur = useRef(target);
+  useEffect(() => {
+    const from = cur.current, keys = Object.keys(target);
+    if (keys.every((k) => from[k] === target[k])) return;
+    let raf, t0;
+    const tick = (now) => {
+      if (t0 == null) t0 = now;
+      const q = Math.min(1, (now - t0) / ms), e = ease(q);
+      const next = q < 1 ? Object.fromEntries(keys.map((k) => [k, lerp(from[k], target[k], e)])) : target;
+      cur.current = next; setV(next);
+      if (q < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig, ms]);
+  return v;
+}
+
+// morph a list of rects [{x,y,w,h}] into a new list: shared indices glide/resize, new ones are born
+// (born(t,i) -> start row), vanished ones shrink away. Returns [x,y,w,h,opacity] rows.
+function useMorph(rects, born, ms = 850) {
+  const sig = rects.map((r) => `${r.x.toFixed(1)},${r.y.toFixed(1)},${r.w.toFixed(1)},${r.h.toFixed(1)}`).join("|");
+  const toArr = rects.map((r) => [r.x, r.y, r.w, r.h, 1]);
+  const [v, setV] = useState(toArr);
+  const cur = useRef(toArr);
+  useEffect(() => {
+    const from = cur.current;
+    if (from.length === toArr.length && from.every((f, i) => f.every((x, j) => Math.abs(x - toArr[i][j]) < 0.01))) return;
+    const L = Math.max(from.length, toArr.length), A = [], B = [];
+    for (let i = 0; i < L; i++) {
+      const f = from[i], t = toArr[i];
+      A.push(f ?? born(t, i));
+      B.push(t ?? [f[0] + f[2] / 2, f[1] + f[3] / 2, 0, 0, 0]);
+    }
+    let raf, t0;
+    const tick = (now) => {
+      if (t0 == null) t0 = now;
+      const q = Math.min(1, (now - t0) / ms), e = ease(q);
+      const next = q < 1 ? A.map((a, i) => a.map((x, j) => lerp(x, B[i][j], e))) : toArr;
+      cur.current = next; setV(next);
+      if (q < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig, ms]);
+  return v;
 }
 
 // trapezoid in a unit box: left/right edge heights as fractions of the box height
@@ -76,16 +131,6 @@ function sliceGeo(rect, r) {
     dn: { x: x0 + ws + g, y: cy - hmax / 2, w: ws, h: hmax, pts: trap((ar * u) / hmax, u / hmax) },
   };
 }
-
-// before the split the slices sit collapsed inside the dense matrices
-const hiddenGeo = (r) => {
-  const ar = 4 * r, mx = Math.max(1, ar);
-  return {
-    u: 0, hmax: 0, ar,
-    up: { x: UP.x + UP.w / 2, y: MID, w: 0.01, h: 0.01, pts: trap(1 / mx, ar / mx) },
-    dn: { x: DN.x + DN.w / 2, y: MID, w: 0.01, h: 0.01, pts: trap(ar / mx, 1 / mx) },
-  };
-};
 
 function Slider({ label, value, min, max, onChange, fmt = (v) => v, hint }) {
   return (
@@ -111,7 +156,7 @@ const Stat = ({ k, v, sub, tone }) => (
   </div>
 );
 
-function Bar({ label, sub, segs, max, on = true }) {
+function Bar({ label, sub, segs, max, on = true, f = 1 }) {
   return (
     <div style={{ display: "grid", gap: 4, opacity: on ? 1 : 0.2, transition: "opacity .5s" }}>
       <div style={{ display: "flex", justifyContent: "space-between", fontFamily: mono, fontSize: 11.5 }}>
@@ -119,7 +164,7 @@ function Bar({ label, sub, segs, max, on = true }) {
         <span style={{ color: T.dim }}>{fmtP(segs.reduce((a, [v]) => a + v, 0))}</span>
       </div>
       <div style={{ display: "flex", height: 16, background: T.well, borderRadius: 4, overflow: "hidden" }}>
-        {segs.map(([v, c], i) => <div key={i} style={{ width: `${on ? Math.max((v / max) * 100, v > 0 ? 0.8 : 0) : 0}%`, background: c, transition: "width .8s cubic-bezier(.35,.7,.25,1)" }} />)}
+        {segs.map(([v, c], i) => <div key={i} style={{ width: `${(on ? Math.max((v / max) * 100, v > 0 ? 0.8 : 0) : 0) * f}%`, background: c }} />)}
       </div>
       <div style={{ fontFamily: mono, fontSize: 10.5, color: T.dim }}>{sub}</div>
     </div>
@@ -129,18 +174,22 @@ function Bar({ label, sub, segs, max, on = true }) {
 export default function DenseToMoEView() {
   const [stage, setStage] = useState(0);
   const [N0, setN0] = useState(8); // experts in the conventional MoE, each as big as the dense FFN
-  const [s, setS] = useState(1);
+  const [sT, setS] = useState(1);
   const [k0, setK0] = useState(2); // its top-k
   const [tokId, setTokId] = useState(1);
   const [playing, setPlaying] = useState(false);
   const [m0, setM0] = useState(2); // fine-grained factor: each expert is cut into m pieces
-  const [M, setM] = useState(1024);
+  const [MT, setM] = useState(1024);
   // DeepSeekMoE fine-grained segmentation: cut each expert into m smaller ones
   // (width H/m) and activate m times as many, so total and active params stay put.
   const m = Math.min(m0, Math.floor(256 / N0), 32);
-  const N = N0 * m;
-  const kk = Math.min(k0 * m, N);
+  const NT = N0 * m;
+  const kT = Math.min(k0 * m, NT);
+  const nT = NT + sT;
   const inv = m;
+  // every quantity that is drawn or printed is tweened from its previous value (counts are rounded)
+  const a = useTweenNums({ N: NT, kk: kT, s: sT, M: MT, r: 1 / m, f1: stage >= 1 ? 1 : 0, f2: stage >= 2 ? 1 : 0, f3: stage >= 3 ? 1 : 0 });
+  const N = Math.round(a.N), kk = Math.round(a.kk), s = Math.round(a.s), M = Math.round(a.M);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -159,15 +208,16 @@ export default function DenseToMoEView() {
   }, [playing, stage]);
 
   const n = N + s;
-  const rects = useMemo(() => expertRects(stage, N, s), [stage, N, s]);
+  const rects = useMemo(() => expertRects(stage, NT, sT), [stage, NT, sT]);
+  const rv = useMorph(rects, (t, i) => (stage >= 2 && i < sT ? [t[0] - 90, t[1], t[2], t[3], 0] : [t[0] + t[2] / 2, t[1] + t[3] / 2, 0, 0, 0])).map(([x, y, w, h, o]) => ({ x, y, w, h, o }));
   // the sample token: router scores for the N routed experts, top-k of them run
   const route = useMemo(() => {
-    const r = mulberry(tokId * 7919 + N);
-    const sc = Array.from({ length: N }, () => 0.05 + 0.9 * r() ** 1.6);
-    const order = sc.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]).slice(0, kk);
+    const r = mulberry(tokId * 7919 + NT);
+    const sc = Array.from({ length: NT }, () => 0.05 + 0.9 * r() ** 1.6);
+    const order = sc.map((v, i) => [v, i]).sort((x, y) => y[0] - x[0]).slice(0, kT);
     const sum = order.reduce((a, [v]) => a + v, 0);
     return { sc, picked: order.map(([v, i]) => ({ i, g: v / sum })) };
-  }, [tokId, N, kk]);
+  }, [tokId, NT, kT]);
   const pickedSet = new Set(route.picked.map((p) => p.i));
 
   const active = (s + kk) / n;
@@ -177,7 +227,7 @@ export default function DenseToMoEView() {
 
   // parameter accounting (two matrices per FFN: W_up [M,H] and W_down [H,M])
   const Hd = 4 * M;
-  const r = 1 / inv;
+  const r = a.r;
   const He = r * Hd;
   const denseP = 2 * M * Hd;
   const expertP = 2 * M * He;
@@ -189,19 +239,19 @@ export default function DenseToMoEView() {
   const heTxt = inv === 1 ? "H" : `H/${inv}`;
   const rTxt = inv === 1 ? "1" : `1/${inv}`;
 
-  const colorOf = (e) => (stage === 0 ? T.accent : stage >= 2 && e < s ? T.accent2 : stage === 1 ? hue(e) : hue(e - s + 3));
-  const onE = (e) => !routing || e < s || pickedSet.has(e - s);
-  const repE = stage >= 3 ? s + route.picked[0].i : stage >= 2 ? s : 0; // expert whose shapes are written out
+  const colorOf = (e) => (stage === 0 ? T.accent : stage >= 2 && e < sT ? T.accent2 : stage === 1 ? hue(e) : hue(e - sT + 3));
+  const onE = (e) => !routing || e < sT || pickedSet.has(e - sT);
+  const repE = stage >= 3 ? sT + route.picked[0].i : stage >= 2 ? sT : 0; // expert whose shapes are written out
   const rHn = Math.round(He);
 
   // wires for stage 3
   const mid = AREA.y + AREA.h / 2;
   const wires = [];
   if (routing) {
-    rects.forEach((r, e) => {
-      if (!onE(e)) return;
+    rv.forEach((r, e) => {
+      if (e >= nT || !onE(e) || r.w < 1) return;
       const cy = r.y + r.h / 2;
-      const shared = e < s;
+      const shared = e < sT;
       wires.push({ key: `in${e}`, d: `M74,${mid} C130,${mid} ${r.x - 40},${cy} ${r.x},${cy}`, c: shared ? T.accent2 : colorOf(e) });
       wires.push({ key: `out${e}`, d: `M${r.x + r.w},${cy} C${r.x + r.w + 30},${cy} ${AREA.x + AREA.w + 10},${mid} 772,${mid}`, c: shared ? T.accent2 : colorOf(e) });
     });
@@ -220,10 +270,10 @@ export default function DenseToMoEView() {
       <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: "12px 16px", display: "flex", gap: 20, flexWrap: "wrap" }}>
         <Slider label="experts before splitting N₀" value={N0} min={2} max={32} onChange={(v) => { setN0(v); setK0((q) => Math.min(q, v)); }} hint={`a conventional MoE: ${N0} experts, each as big as the dense FFN`} />
         <Slider label="top-k₀ of those" value={Math.min(k0, N0)} min={1} max={N0} onChange={setK0} hint={`${Math.min(k0, N0)} of ${N0} experts run per token`} />
-        <Slider label="fine-grained factor m" value={m} min={1} max={Math.min(32, Math.floor(256 / N0))} onChange={setM0} fmt={(v) => `×${v}`} hint={`each expert → ${m} pieces of width H/${m}: N = ${N0}·${m} = ${N}, k = ${Math.min(k0, N0)}·${m} = ${kk}`} />
-        <Slider label="shared experts s" value={s} min={0} max={4} onChange={setS} hint={s ? `${s} block${s > 1 ? "s" : ""} every token passes through` : "none: every expert is routed"} />
+        <Slider label="fine-grained factor m" value={m} min={1} max={Math.min(32, Math.floor(256 / N0))} onChange={setM0} fmt={(v) => `×${v}`} hint={`each expert → ${m} pieces of width H/${m}: N = ${N0}·${m} = ${NT}, k = ${Math.min(k0, N0)}·${m} = ${kT}`} />
+        <Slider label="shared experts s" value={sT} min={0} max={4} onChange={setS} hint={sT ? `${sT} block${sT > 1 ? "s" : ""} every token passes through` : "none: every expert is routed"} />
         <label style={{ fontFamily: mono, fontSize: 11, color: T.dim, alignSelf: "end" }}>M ={" "}
-          <select value={M} onChange={(e) => setM(+e.target.value)} style={{ fontFamily: mono, background: T.well, color: T.ink, border: `1px solid ${T.rule}`, borderRadius: 5, padding: "2px 4px" }}>
+          <select value={MT} onChange={(e) => setM(+e.target.value)} style={{ fontFamily: mono, background: T.well, color: T.ink, border: `1px solid ${T.rule}`, borderRadius: 5, padding: "2px 4px" }}>
             {[512, 1024, 2048, 4096, 7168].map((v) => <option key={v} value={v}>{v}</option>)}
           </select>{" "}· H = 4M
         </label>
@@ -234,7 +284,7 @@ export default function DenseToMoEView() {
           <text x={AREA.x} y={AREA.y - 16} fontFamily={mono} fontSize="11" letterSpacing="0.1em" fill={T.dim}>
             {stage === 0 ? "DENSE FFN · y = x + W_down · act(W_up · x)"
               : stage === 1 ? `${n} EXPERTS · EACH OWNS W_up [${M} × ${rHn}] AND W_down [${rHn} × ${M}]`
-              : s ? "SHARED · ALWAYS ON" : "NO SHARED EXPERTS"}
+              : sT ? "SHARED · ALWAYS ON" : "NO SHARED EXPERTS"}
           </text>
           {stage >= 2 && <text x={AREA.x} y={ROUTED_Y - 8} fontFamily={mono} fontSize="11" letterSpacing="0.1em" fill={T.dim}>ROUTED · {routing ? `TOP-${kk} OF ${N} RUN · idx, g [k] = [${kk}]` : `${N} EXPERTS WAIT FOR THE ROUTER`}</text>}
 
@@ -252,8 +302,8 @@ export default function DenseToMoEView() {
             <rect x={92} y={mid - 66} width={64} height={132} rx={8} fill={T.well} stroke={T.wire} />
             <text x={124} y={mid - 52} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={T.wire}>router</text>
             <Tex x={124} y={mid - 46} w={70} h={16} tex={`W_g\\in\\mathbb{R}^{M\\times N}`} size={8.5} color={T.wire} align="center" />
-            {Array.from({ length: Math.min(N, 12) }, (_, i) => {
-              const v = route.sc[Math.floor((i * N) / Math.min(N, 12))];
+            {Array.from({ length: Math.min(NT, 12) }, (_, i) => {
+              const v = route.sc[Math.floor((i * NT) / Math.min(NT, 12))];
               return <rect key={i} x={100} y={mid - 30 + i * 6} width={48 * v} height={4} rx={1.5} fill={T.wire} opacity={routing ? 0.9 : 0.35} style={{ transition: "all .5s" }} />;
             })}
             <Tex x={124} y={mid + 50} w={70} h={16} tex={`xW_g\\in\\mathbb{R}^{N}`} size={9} color={T.dim} align="center" />
@@ -286,27 +336,29 @@ export default function DenseToMoEView() {
           </g>
 
           {/* expert blocks */}
-          {rects.map((r, e) => {
-            const on = onE(e);
+          {rv.map((r, e) => {
+            const on = e >= nT || onE(e);
             const c = colorOf(e);
+            if (r.w < 0.5 || r.h < 0.5) return null;
             return (
-              <g key={e}>
+              <g key={e} opacity={r.o}>
                 <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={6} fill={T.well} stroke={e === repE && split ? T.ink : c} strokeWidth={routing && on ? 2.2 : e === repE && split ? 1.8 : 1.2} opacity={on ? 1 : 0.35} />
                 {split && r.w > 30 && r.h > 22 && (
-                  <text x={r.x + 5} y={r.y + 11} fontFamily={mono} fontSize="8.5" fontWeight="700" fill={c} opacity={on ? 1 : 0.4}>{stage >= 2 && e < s ? `S${e}` : `E${e - (stage >= 2 ? s : 0)}`}</text>
+                  <text x={r.x + 5} y={r.y + 11} fontFamily={mono} fontSize="8.5" fontWeight="700" fill={c} opacity={on ? 1 : 0.4}>{stage >= 2 && e < sT ? `S${e}` : `E${e - (stage >= 2 ? sT : 0)}`}</text>
                 )}
               </g>
             );
           })}
 
           {/* each expert's W_up and W_down trapezoids */}
-          {Array.from({ length: n }, (_, e) => {
-            const g = stage === 0 ? hiddenGeo(r) : sliceGeo(rects[e], r);
-            const on = onE(e), c = colorOf(e);
-            const vis = stage === 0 ? 0 : 1;
+          {rv.map((rr, e) => {
+            if (rr.w < 0.5 || rr.h < 0.5) return null;
+            const g = sliceGeo(rr, r);
+            const on = e >= nT || onE(e), c = colorOf(e);
+            const vis = stage === 0 ? 0 : rr.o;
             const tr = (b, o) => ({
               transform: `translate(${b.x}px, ${b.y}px) scale(${b.w}, ${b.h})`, opacity: vis * o,
-              transition: `transform .85s cubic-bezier(.35,.7,.25,1) ${(e % 24) * 12}ms, opacity .6s, fill .5s`,
+              transition: "opacity .6s, fill .5s", // geometry is already animated frame by frame
             });
             const big = split && g.hmax >= 34;
             return (
@@ -327,7 +379,7 @@ export default function DenseToMoEView() {
           {/* the chosen expert's shapes, written out in full */}
           {split && (
             <g fontFamily={mono} fontSize="10.5">
-              <Tex x={AREA.x} y={H - 92} w={560} h={24} size={13} color={colorOf(repE)} tex={`${stage >= 2 && repE < s ? `\\mathrm{S}_{${repE}}` : `\\mathrm{E}_{${repE - (stage >= 2 ? s : 0)}}`}:\\;\\; r=${inv === 1 ? "1" : `\\tfrac{1}{${inv}}`}\\;\\Rightarrow\\; rH=${rHn},\\quad 2\\cdot M\\cdot rH=\\mathrm{${fmtP(expertP)}}\\text{ params}`} />
+              <Tex x={AREA.x} y={H - 92} w={560} h={24} size={13} color={colorOf(repE)} tex={`${stage >= 2 && repE < sT ? `\\mathrm{S}_{${repE}}` : `\\mathrm{E}_{${repE - (stage >= 2 ? sT : 0)}}`}:\\;\\; r=${inv === 1 ? "1" : `\\tfrac{1}{${inv}}`}\\;\\Rightarrow\\; rH=${rHn},\\quad 2\\cdot M\\cdot rH=\\mathrm{${fmtP(expertP)}}\\text{ params}`} />
               <Tex x={AREA.x} y={H - 66} w={620} h={26} size={13} color={T.soft} tex={`W_{\\mathrm{up}}\\in\\mathbb{R}^{M\\times rH}=\\mathbb{R}^{${M}\\times ${rHn}}\\qquad W_{\\mathrm{down}}\\in\\mathbb{R}^{rH\\times M}=\\mathbb{R}^{${rHn}\\times ${M}}`} />
               <polygon points="0,2 26,0 26,13 0,11" transform={`translate(${AREA.x},${H - 32})`} fill={T.soft} opacity={0.95} />
               <text x={AREA.x + 32} y={H - 21} fill={T.dim}>W_up slice: M → rH</text>
@@ -347,7 +399,7 @@ export default function DenseToMoEView() {
 
           {routing && (
             <text x={AREA.x} y={AREA.y + AREA.h + 36} fontFamily={mono} fontSize="12" fill={T.soft}>
-              y = x + {s ? `Σ shared(x)  + ` : ""}Σ<tspan baselineShift="sub" fontSize="9">top-{kk}</tspan> g<tspan baselineShift="sub" fontSize="9">i</tspan> · FFN<tspan baselineShift="sub" fontSize="9">i</tspan>(x)
+              y = x + {sT ? `Σ shared(x)  + ` : ""}Σ<tspan baselineShift="sub" fontSize="9">top-{kk}</tspan> g<tspan baselineShift="sub" fontSize="9">i</tspan> · FFN<tspan baselineShift="sub" fontSize="9">i</tspan>(x)
             </text>
           )}
           {stage === 0 && <text x={AREA.x} y={AREA.y + AREA.h + 36} fontFamily={mono} fontSize="12" fill={T.soft}>both matrices in full for every token: 2 · M · H = {fmtP(denseP)} params read per token</text>}
@@ -364,8 +416,8 @@ export default function DenseToMoEView() {
         <div style={{ flex: "1 1 100%", minWidth: 0, background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: "12px 16px", display: "grid", gap: 12 }}>
           <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.12em", color: T.dim }}>PARAMETERS · FFN LAYER</div>
           <Bar label="dense FFN" sub={`2 · M · H = ${fmtP(denseP)}`} segs={[[denseP, T.accent]]} max={maxP} />
-          <Bar label="MoE · all experts" sub={stage >= 2 ? `${n} · 2·M·${heTxt} + router` : `${n} · 2·M·${heTxt}`} on={stage >= 1} segs={[[expertsTotal, T.soft], ...(stage >= 2 ? [[routerP, T.wire]] : [])]} max={maxP} />
-          <Bar label="MoE · used per token" sub={`(${s} + ${kk}) · 2·M·${heTxt} + router`} on={stage >= 3} segs={[[(s + kk) * expertP, T.accent2], [routerP, T.wire]]} max={maxP} />
+          <Bar label="MoE · all experts" sub={stage >= 2 ? `${n} · 2·M·${heTxt} + router` : `${n} · 2·M·${heTxt}`} on={stage >= 1} f={a.f1} segs={[[expertsTotal, T.soft], [routerP * a.f2, T.wire]]} max={maxP} />
+          <Bar label="MoE · used per token" sub={`(${s} + ${kk}) · 2·M·${heTxt} + router`} on={stage >= 3} f={a.f3} segs={[[(s + kk) * expertP, T.accent2], [routerP, T.wire]]} max={maxP} />
           <div style={{ display: "grid", gap: 6, fontFamily: mono, fontSize: 12, color: T.soft, opacity: stage >= 1 ? 1 : 0.35, transition: "opacity .4s" }}>
             <div>stored: <b style={{ color: totalP > denseP ? T.wire : T.accent }}>{signed(totalP - denseP)}</b> vs dense ({pct(totalP / denseP - 1)})<span style={{ color: T.dim }}> · {n} · r = {(n * r).toFixed(2)}× the dense FFN, plus router M·N = {fmtP(routerP)}</span></div>
             <div style={{ opacity: stage >= 3 ? 1 : 0.35 }}>per token: <b style={{ color: activeP < denseP ? T.accent : T.bad }}>{signed(activeP - denseP)}</b> vs dense ({pct(activeP / denseP - 1)}){activeP > denseP && <span style={{ color: T.dim }}> · more compute than dense: (s + k) · r = {((s + kk) * r).toFixed(2)} dense FFNs per token</span>}</div>
@@ -379,8 +431,8 @@ export default function DenseToMoEView() {
       {routing && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontFamily: mono, fontSize: 11.5, color: T.dim }}>
           <span>token {tokId} → </span>
-          {s > 0 && <span style={{ color: T.accent2 }}>{s} shared (weight 1)</span>}
-          {route.picked.map((p) => <span key={p.i} style={{ color: colorOf(p.i + s), border: `1px solid ${colorOf(p.i + s)}66`, borderRadius: 10, padding: "1px 8px" }}>E{p.i} · g {p.g.toFixed(2)}</span>)}
+          {sT > 0 && <span style={{ color: T.accent2 }}>{sT} shared (weight 1)</span>}
+          {route.picked.map((p) => <span key={p.i} style={{ color: colorOf(p.i + sT), border: `1px solid ${colorOf(p.i + sT)}66`, borderRadius: 10, padding: "1px 8px" }}>E{p.i} · g {p.g.toFixed(2)}</span>)}
           <button onClick={() => setTokId((t) => t + 1)} style={{ ...btn(false, false), height: 26, fontSize: 11.5 }}>↻ another token</button>
         </div>
       )}
