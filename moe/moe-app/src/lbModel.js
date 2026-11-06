@@ -2,9 +2,9 @@
 // n experts, top-k routing, sigmoid affinities s = sigmoid(logit). Logits carry a
 // fixed popularity skew so an untrained router overloads the first experts.
 
-export const LB = { n: 8, k: 2, m: 64, T: 16, ranks: 4 };
+export const LB = { n: 4, k: 2, m: 64, T: 8, ranks: 4 }; // small on purpose: every number fits on screen
 export const XC = ["#6EF3DD", "#FF8AC6", "#FFC94D", "#8AB4FF", "#B69CFF", "#7EE081", "#FF9E6E", "#C7D1DD"];
-const POP = [1.1, 0.8, 0.45, 0.2, 0, -0.2, -0.5, -0.9];
+const POP = [1.0, 0.45, -0.1, -0.7]; // one popularity offset per expert (length n)
 
 export function rng(seed) {
   let a = seed >>> 0;

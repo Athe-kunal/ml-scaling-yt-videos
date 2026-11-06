@@ -131,7 +131,7 @@ export default function CompareView() {
         </div>
         <div style={{ flex: 1 }} />
         {picker("follow expert", ex, setEx, LB.n)}
-        {ki?.pick === "tok" && picker("follow token", tok, setTok, 8)}
+        {ki?.pick === "tok" && picker("follow token", tok, setTok, LB.T)}
       </header>
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

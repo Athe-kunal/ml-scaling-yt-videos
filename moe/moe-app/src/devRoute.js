@@ -3,7 +3,7 @@
 // M devices, picked by the sum of the top K/M affinities of the experts on each
 // device; the top-K experts are then taken among the experts of those devices.
 
-export const DEV = { E: 12, D: 4, Ed: 3, K: 4, M: 2, B: 8, SEED: 4 };
+export const DEV = { E: 8, D: 4, Ed: 2, K: 4, M: 2, B: 4, SEED: 4 };
 export const devOf = (e) => Math.floor(e / DEV.Ed);
 
 function mulberry(seed) {

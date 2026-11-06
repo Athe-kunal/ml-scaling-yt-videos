@@ -21,6 +21,7 @@ const ZERO = Array(n).fill(0);
 const BIAS_DEMO = SIM[25].b;
 const SNAPS = [1, 3, 6, 12, 25, 50];
 const W = 860, H = 430;
+const HG = { x0: 50, cw: 84, ch: 34, y0: 56 }; // heat-map grid: few cells, so draw them big
 const DSC = devScores(DEV.SEED);
 const RR = DSC.map((r) => routeDev(r, true));
 const RU = DSC.map((r) => routeDev(r, false));
@@ -141,11 +142,11 @@ function AreaModel({ x, y, w, h, f, P, hl, onPick, e }) {
 }
 
 function Heat({ scores, rt, base, stage, bias, e = 1 }) {
-  const x0 = 50, cw = 50, ch = 19, y0 = 56;
+  const { x0, cw, ch, y0 } = HG;
   return (
     <g>
       {Array.from({ length: n }, (_, j) => (
-        <text key={j} x={x0 + j * cw + cw / 2 - 2} y={y0 - 10} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={XC[j]}>E{j}</text>
+        <text key={j} x={x0 + j * cw + cw / 2 - 2} y={y0 - 10} textAnchor="middle" fontFamily={mono} fontSize="12" fontWeight="700" fill={XC[j]}>E{j}</text>
       ))}
       {bias && Array.from({ length: n }, (_, j) => {
         const v = bias[j] * e, hh = Math.min(12, Math.abs(v) * 110);
@@ -157,7 +158,7 @@ function Heat({ scores, rt, base, stage, bias, e = 1 }) {
         const gsum = sel.reduce((a, j) => a + row[j], 0);
         return (
           <g key={t}>
-            <text x={x0 - 8} y={y0 + t * ch + 13} textAnchor="end" fontFamily={mono} fontSize="9.5" fill={T.dim}>x{t}</text>
+            <text x={x0 - 8} y={y0 + t * ch + ch / 2 + 3} textAnchor="end" fontFamily={mono} fontSize="11" fill={T.dim}>x{t}</text>
             {row.map((s, j) => {
               const on = sel.includes(j);
               const was = base ? base[t].sel.includes(j) : on;
@@ -168,6 +169,7 @@ function Heat({ scores, rt, base, stage, bias, e = 1 }) {
               let shown = s, tint = s;
               if (stage === 0) { shown = lerp(logit(s), s, e); tint = lerp(0.35, s, e); } // logit z → sigmoid(z)
               else if (stage === 1.5 && on && !bias) shown = lerp(s, s / gsum, e); // s → s / Σ s_sel
+              else if (stage > 1.5 && on && !bias) shown = s / gsum; // later steps keep the finished gate
               else if (bias) shown = s + e * bias[j]; // s → s + b
               return (
                 <g key={j} opacity={stage >= 1 && !on ? (topkAnim ? lerp(1, 0.28, e) : bias ? 0.28 : 0.28) : 1} transform={topkAnim && on ? `translate(0,${-2 * e})` : undefined}>
@@ -177,7 +179,7 @@ function Heat({ scores, rt, base, stage, bias, e = 1 }) {
                     stroke={flip ? (on ? T.accent2 : T.wire) : on && stage >= 1 ? T.ink : "none"} strokeWidth={flip ? 2.2 : 1.4} strokeOpacity={topkAnim && on ? e : 1} strokeDasharray={flip && !on ? "3 2" : "none"}
                   />
                   {show && (
-                    <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + t * ch + 12} textAnchor="middle" fontFamily={mono} fontSize={stage >= 1.5 && on && !bias ? 8.5 : 9.5} fontWeight="600" fill={T.ink} opacity={topkAnim && !on ? clamp01(1 - 2 * e) : 1}>
+                    <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + t * ch + ch / 2 + 2} textAnchor="middle" fontFamily={mono} fontSize={stage >= 1.5 && on && !bias ? 11 : 12} fontWeight="600" fill={T.ink} opacity={topkAnim && !on ? clamp01(1 - 2 * e) : 1}>
                       {stage >= 1.5 && on && !bias ? `${f2(s)}→${f2(shown)}` : f2(shown)}
                     </text>
                   )}
@@ -203,7 +205,7 @@ function Worked({ rt, stage, e = 1 }) {
   const gates = sel.map((j) => `g_{\\mathrm{E}_{${j}}}=\\dfrac{${cc(j)}}{${sel.map(cc).join("+")}}=${f2(row[j] / sum)}`);
   return (
     <g>
-      <rect x={46} y={53} width={n * 50 + 2} height={22} rx={5} fill="none" stroke={T.accent} strokeWidth={1.6} />
+      <rect x={HG.x0 - 4} y={HG.y0 - 3} width={n * HG.cw + 2} height={HG.ch + 3} rx={5} fill="none" stroke={T.accent} strokeWidth={1.6} />
       <text x={470} y={156} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim}>TOKEN x0 (OUTLINED ROW)</text>
       {stage === 1 && (
         <g>
@@ -212,7 +214,7 @@ function Worked({ rt, stage, e = 1 }) {
           <Tex x={470} y={234} w={380} h={30} size={12} color={T.dim} tex={`\\text{the other ${n - k} scores are dropped}`} />
           <text x={470} y={280} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim} opacity={e}>SELECTED SCORES → GATE ROW</text>
           {sel.map((j, i) => {
-            const fx = 50 + j * 50, fy = 56 + 1, tx = 470 + i * 72, ty = 288;
+            const fx = HG.x0 + j * HG.cw + 18, fy = HG.y0 + 9, tx = 470 + i * 72, ty = 288;
             return (
               <g key={j}>
                 <rect x={tx} y={ty} width={47} height={16} rx={3} fill="none" stroke={T.rule} strokeDasharray="2 3" />

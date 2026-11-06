@@ -150,8 +150,8 @@ function Scene({ step, tok, ex, setEx }) {
       </g>
     );
   } else if (step.scene === "margin") {
-    const x0 = 40, cw = 46, ch = 19, y0 = 56;
-    const rows = 16;
+    const x0 = 40, cw = 90, ch = 34, y0 = 56;
+    const rows = LB.T;
     const alpha = RT0[tok].cutoff;
     const shift = (i, j) => QB0.margins[i][j] + RT0[i].cutoff * (1 - e); // s_ij → s_ij − α_i
     const tokVals = QB0.margins[tok].map((_, j) => shift(tok, j));
@@ -160,7 +160,7 @@ function Scene({ step, tok, ex, setEx }) {
         {Array.from({ length: n }, (_, j) => <text key={j} x={x0 + j * cw + cw / 2 - 2} y={y0 - 10} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={XC[j]}>E{j}</text>)}
         {Array.from({ length: rows }, (_, i) => (
           <g key={i} opacity={i === tok ? 1 : 0.7}>
-            <text x={x0 - 6} y={y0 + i * ch + 13} textAnchor="end" fontFamily={mono} fontSize="9.5" fill={i === tok ? T.ink : T.dim}>x{i}</text>
+            <text x={x0 - 6} y={y0 + i * ch + ch / 2 + 3} textAnchor="end" fontFamily={mono} fontSize="11" fill={i === tok ? T.ink : T.dim}>x{i}</text>
             {QB0.margins[i].map((v, j) => (
               <rect key={j} x={x0 + j * cw} y={y0 + i * ch} width={cw - 3} height={ch - 3} rx={3} fill={div(shift(i, j))} stroke={i === tok ? T.ink : "none"} />
             ))}
@@ -296,7 +296,7 @@ export default function KimiView() {
       subtitle={`bias from a score quantile instead of a ± γ nudge · toy: n=${n} experts, k=${k}, ${m} tokens`}
       blocks={BLOCKS}
       steps={STEPS}
-      header={(step) => (step.pick === "tok" ? picker("follow token", tok, setTok, 8) : step.pick === "ex" ? picker("follow expert", ex, setEx, n) : null)}
+      header={(step) => (step.pick === "tok" ? picker("follow token", tok, setTok, LB.T) : step.pick === "ex" ? picker("follow expert", ex, setEx, n) : null)}
       scene={(step) => <Scene step={step} tok={tok} ex={ex} setEx={setEx} />}
       glossary={KIMI_GLOSSARY}
       shapes={(step) => KIMI_SHAPES[step.block === "race" ? "race" : step.sid]}
