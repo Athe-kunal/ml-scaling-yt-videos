@@ -8,11 +8,13 @@ import DeepSeekView from "./DeepSeekView";
 import KimiView from "./KimiView";
 import CompareView from "./CompareView";
 import RouterZLossView from "./RouterZLossView";
+import GatingFunctionsView from "./GatingFunctionsView";
 
 const VIEWS = [
   { id: "dense", label: "Dense → MoE", sub: "set sparsity, watch the FFN split into experts", C: DenseToMoEView },
   { id: "gating", label: "MoE layer", sub: "top-2 gating · balance · sharding", C: GatingView },
   { id: "a2a", label: "All-to-all", sub: "the collective behind dispatch / combine", C: A2AView },
+  { id: "gatefn", label: "Gating functions", sub: "softmax squeezes · sigmoid stays independent", C: GatingFunctionsView },
   { id: "eplb", label: "EPLB placement", sub: "where experts live · hot ones get copies", C: EplbView },
   { id: "ds", label: "DeepSeek-V3 balancing", sub: "aux loss → loss-free bias", C: DeepSeekView },
   { id: "kimi", label: "Kimi K3 balancing", sub: "quantile-based bias", C: KimiView },
