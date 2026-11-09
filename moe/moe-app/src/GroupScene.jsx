@@ -11,7 +11,7 @@ import { useProgress, ease, lerp, clamp01 } from "./anim";
 //
 // stage: 0 gates · 1 mean · 2 top-2 · 3 pass 1 · 4 aux loss · 5 pass 2 · 6 result
 
-const { S, E, C } = CFG;
+const { S, E } = CFG;
 const W = 860, H = 490;
 const ROW0 = 62, ROWH = 38;
 const GX = 92, GW = 58;
@@ -19,8 +19,6 @@ const T1X = 348, T2X = 382, INFOX = 412;
 const BX = 520, BXW = 84, BOT = 300, SLOT = 28;
 
 const rowY = (s) => ROW0 + s * ROWH;
-const slotXY = (e, k) => [BX + e * BXW + 35, BOT - (k + 1) * SLOT + 13];
-const overXY = (e, j) => [BX + e * BXW + 35, BOT - C * SLOT - 16 - Math.min(j, 3) * 24];
 const f2 = (x) => x.toFixed(2).replace(/^0/, "");
 
 function Ticket({ x, y, e, label, hollow, bad, on, delay }) {
@@ -43,7 +41,10 @@ function Ticket({ x, y, e, label, hollow, bad, on, delay }) {
 // loop = { n, cur, ph }: tokens before n are finished, token cur is mid-iteration
 // at phase ph (pass 1: 1 row · 4 read c · 5 compare · 6 store · 7 count;
 // pass 2: 1 row · 4 dice · 5 read c · 6 condition · 7 store · 8 count)
-export default function GroupScene({ gm, stage, loop, line }) {
+export default function GroupScene({ gm, stage, loop, line, C: Cprop }) {
+  const C = Cprop ?? CFG.C; // overridable so a variable capacity factor can replay this exact scene
+  const slotXY = (e, k) => [BX + e * BXW + 35, BOT - (k + 1) * SLOT + 13];
+  const overXY = (e, j) => [BX + e * BXW + 35, BOT - C * SLOT - 16 - Math.min(j, 3) * 24];
   const lp = loop && (stage === 3 || stage === 5) ? loop : null;
   // the picture id: replays when it changes, holds still between lines that share one picture
   const pkey = lp ? `${stage}:${lp.cur}:${lp.ph}` : stage === 2 ? `2:${line}` : `${stage}`;

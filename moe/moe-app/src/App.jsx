@@ -2,6 +2,7 @@ import { useState } from "react";
 import { T, mono } from "./theme";
 import DenseToMoEView from "./DenseToMoEView";
 import GatingView from "./GatingView";
+import CapacityView from "./CapacityView";
 import A2AView from "./A2AView";
 import EplbView from "./EplbView";
 import DeepSeekView from "./DeepSeekView";
@@ -13,6 +14,7 @@ import GatingFunctionsView from "./GatingFunctionsView";
 const VIEWS = [
   { id: "dense", label: "Dense → MoE", sub: "set sparsity, watch the FFN split into experts", C: DenseToMoEView },
   { id: "gating", label: "MoE layer", sub: "top-2 gating · balance · sharding", C: GatingView },
+  { id: "capacity", label: "Capacity & ℓ_aux", sub: "factor · overflow · CV · the aux-loss sum", C: CapacityView },
   { id: "a2a", label: "All-to-all", sub: "the collective behind dispatch / combine", C: A2AView },
   { id: "gatefn", label: "Gating functions", sub: "softmax squeezes · sigmoid stays independent", C: GatingFunctionsView },
   { id: "eplb", label: "EPLB placement", sub: "where experts live · hot ones get copies", C: EplbView },

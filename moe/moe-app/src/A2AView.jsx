@@ -3,6 +3,7 @@ import { useProgress, ease, lerp, clamp01 } from "./anim";
 import { T, mono, btn } from "./theme";
 import { CFG, EXPERT_COLORS as EC, SEED, buildModel } from "./moeModel";
 import Stepper from "./Stepper";
+import MoEBlockMap from "./MoEBlockMap";
 
 // All-to-all as a stepper. D devices each own Ed experts (E = D·Ed in total).
 // Device s holds D token bundles; bundle t carries the tokens bound for the Ed
@@ -515,8 +516,16 @@ export default function A2AView() {
           </div>
         </div>
       )}
-      scene={(step) => <Scene step={step} sel={sel} cfg={cfg} />}
-      extra={(step) => <Inspector cfg={cfg} step={step} sel={sel} />}
+      scene={(step) => <MoEBlockMap step={step} Ed={Ed} E={cfg.E} sel={sel} />}
+      extra={(step) => (
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: 12 }}>
+            <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.12em", color: T.dim, marginBottom: 8 }}>DEVICE-LEVEL DETAIL · THE PAIRWISE SEND/RECV MECHANICS</div>
+            <Scene step={step} sel={sel} cfg={cfg} />
+          </div>
+          <Inspector cfg={cfg} step={step} sel={sel} />
+        </div>
+      )}
       glossary={cfg.GLOSSARY}
       shapes={(step) => cfg.SHAPES[step.sid]}
       legend={
