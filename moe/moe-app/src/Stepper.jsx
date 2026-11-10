@@ -167,13 +167,13 @@ export default function Stepper({ title, subtitle, blocks, steps, flat, scene, h
             <button onClick={() => setIdx(Math.min(idx + 1, last))} disabled={idx === last} style={btn(true, idx === last)}>next line ▶</button>
             <button onClick={nextStep} disabled={idx === last} title="next step (⇧→)" style={{ ...btn(false, idx === last), padding: "0 10px" }}>⏭</button>
             <button onClick={() => setPlaying(!playing)} style={btn(playing, false)}>{playing ? "❚❚" : "▶ play"}</button>
-            <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ flex: 1, minWidth: 220, overflow: "hidden" }}>
               <div style={{ fontSize: 15, fontWeight: 600, color: T.ink }}>{item.caption}</div>
-              <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
+              <div style={{ display: "flex", gap: 3, marginTop: 8, minWidth: 0 }}>
                 {firsts.map((f, k) => {
                   const end = firsts[k + 1] ?? last + 1;
                   const cur = idx >= f && idx < end;
-                  return <button key={f} onClick={() => setIdx(f)} title={items[f].sid} aria-label={items[f].sid} style={{ flex: 1, height: 6, borderRadius: 3, border: 0, cursor: "pointer", background: cur ? T.accent : idx >= end ? `${T.accent}66` : T.rule }} />;
+                  return <button key={f} onClick={() => setIdx(f)} title={items[f].sid} aria-label={items[f].sid} style={{ flex: "1 1 0", minWidth: 0, padding: 0, height: 6, borderRadius: 3, border: 0, cursor: "pointer", background: cur ? T.accent : idx >= end ? `${T.accent}66` : T.rule }} />;
                 })}
               </div>
             </div>

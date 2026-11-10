@@ -41,7 +41,7 @@ function Ticket({ x, y, e, label, hollow, bad, on, delay }) {
 // loop = { n, cur, ph }: tokens before n are finished, token cur is mid-iteration
 // at phase ph (pass 1: 1 row · 4 read c · 5 compare · 6 store · 7 count;
 // pass 2: 1 row · 4 dice · 5 read c · 6 condition · 7 store · 8 count)
-export default function GroupScene({ gm, stage, loop, line, C: Cprop }) {
+export default function GroupScene({ gm, stage, loop, line, C: Cprop, capNote }) {
   const C = Cprop ?? CFG.C; // overridable so a variable capacity factor can replay this exact scene
   const slotXY = (e, k) => [BX + e * BXW + 35, BOT - (k + 1) * SLOT + 13];
   const overXY = (e, j) => [BX + e * BXW + 35, BOT - C * SLOT - 16 - Math.min(j, 3) * 24];
@@ -88,7 +88,7 @@ export default function GroupScene({ gm, stage, loop, line, C: Cprop }) {
         <text x={GX} y={34}>GATE g · ONE BAR PER EXPERT</text>
         {showT1 && <text x={T1X - 12} y={34}>TOP-2</text>}
         {stage >= 5 && <text x={INFOX} y={34}>{stage >= 6 ? "WEIGHTS" : "DICE"}</text>}
-        <text x={BX} y={34}>EXPERT BUFFERS · CAP C = {C}</text>
+        <text x={BX} y={34}>EXPERT BUFFERS · CAP C = {C}{capNote ? `  (${capNote})` : ""}</text>
       </g>
       {Array.from({ length: E }, (_, e) => (
         <text key={e} x={GX + e * GW + (GW - 8) / 2} y={52} textAnchor="middle" fontFamily={mono} fontSize="10" fontWeight="700" fill={EC[e]}>E{e}</text>
@@ -243,17 +243,21 @@ export default function GroupScene({ gm, stage, loop, line, C: Cprop }) {
         const q = Array.from({ length: E }, (_, e) => ease(clamp01((p - e * 0.15) / 0.4)));
         const prods = gm.cPass1.map((c, e) => (c / S) * gm.m[e] * q[e]);
         const total = prods.reduce((a, v) => a + v, 0) / E;
-        const terms = prods.map((v, e) => `{\\color{${EC[e]}}${f2(v)}}`).join("+");
         return (
           <g>
-            <g fontFamily={mono} fontSize="10.5" fill={T.dim}>
-              <rect x={20} y={352} width={12} height={12} rx={2} fill={T.soft} />
-              <text x={38} y={362}>c_e / S  (fraction routed)</text>
-              <rect x={20} y={374} width={12} height={12} rx={2} fill="none" stroke={T.soft} strokeWidth={1.5} />
-              <text x={38} y={384}>m_e  (mean gate)</text>
+            <g fontFamily={mono} fontSize="12.5" fill={T.soft}>
+              <text x={20} y={366}><tspan fill={T.wire} fontWeight="700">S = {S}</tspan> tokens in this group (rows x0…x{S - 1})</text>
+              <text x={20} y={386}><tspan fill={T.wire} fontWeight="700">c_e</tspan> = tokens whose 1st choice is e: [{gm.cPass1.join(", ")}]</text>
+              <text x={20} y={406}><tspan fill={T.wire} fontWeight="700">m_e</tspan> = mean gate (row above): [{gm.m.map((v) => f2(v)).join(", ")}]</text>
             </g>
-            <Tex x={20} y={402} w={480} h={30} size={13} color={T.accent2} tex={`\\ell_{aux}=\\tfrac{1}{${E}}\\left(${terms}\\right)=\\mathbf{${total.toFixed(3)}}`} />
-            <text x={20} y={446} fontFamily={mono} fontSize="11" fill={T.dim}>perfectly balanced = {(1 / (E * E)).toFixed(4)}</text>
+            <Tex x={20} y={420} w={490} h={34} size={13} color={T.accent2} tex={`\\ell_{aux}=\\tfrac{1}{${E}}\\left(${gm.cPass1.map((c, e) => `{\\color{${EC[e]}}\\tfrac{${c}}{${S}}\\!\\cdot\\!${f2(gm.m[e])}}`).join("+")}\\right)=\\mathbf{${total.toFixed(3)}}`} />
+            <g fontFamily={mono} fontSize="12" fill={T.dim}>
+              <rect x={20} y={462} width={12} height={12} rx={2} fill={T.soft} />
+              <text x={38} y={472}>c_e/S</text>
+              <rect x={100} y={462} width={12} height={12} rx={2} fill="none" stroke={T.soft} strokeWidth={1.5} />
+              <text x={118} y={472}>m_e</text>
+              <text x={170} y={472}>even split = {(1 / (E * E)).toFixed(4)}</text>
+            </g>
             {Array.from({ length: E }, (_, e) => {
               const x = BX + e * BXW;
               const a = (gm.cPass1[e] / S) * q[e], b = gm.m[e] * q[e];
@@ -266,7 +270,6 @@ export default function GroupScene({ gm, stage, loop, line, C: Cprop }) {
                 </g>
               );
             })}
-            <text x={BX} y={346} fontFamily={mono} fontSize="10" fill={T.dim} letterSpacing="0.1em">(c_e/S)·m_e  → SUM / E</text>
           </g>
         );
       })()}

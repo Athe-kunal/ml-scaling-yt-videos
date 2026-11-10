@@ -13,13 +13,15 @@ import { useProgress, ease, lerp, clamp01, logit } from "./anim";
 // a per-expert bias b_i steers top-K selection only; the gate still uses s.
 
 const { n, k, T: TT } = LB;
-const GAMMA = 0.01; // paper: 0.001, larger here so the motion is visible
+const GAMMA = 0.02; // paper: 0.001; a larger toy value so 10 training steps are enough to see the balance emerge
 const SEQ = scoresOf(1000, TT);
 const AUX = auxTerms(SEQ);
 const SIM = simulate("sign", 60, GAMMA);
+const cvStd = (l) => { const m0 = l.reduce((a, x) => a + x, 0) / l.length; return Math.sqrt(l.reduce((a, x) => a + (x - m0) ** 2, 0) / l.length); }; // population std over the n experts
 const ZERO = Array(n).fill(0);
-const BIAS_DEMO = SIM[25].b;
-const SNAPS = [1, 3, 6, 12, 25, 50];
+const repicked = (b) => { const a = route(SEQ, ZERO), c = route(SEQ, b); return a.filter((r, t) => [...r.sel].sort().join() !== [...c[t].sel].sort().join()).length; }; // toy tokens whose top-K set changes under bias b
+const LOOPT = Array.from({ length: 10 }, (_, i) => i + 1); // every training step, 1 to 10
+const loopStep = (t) => ({ id: `t${t}`, block: "loop", lines: [1, 2, 3], visAt: 0, scene: "loop", t, prev: t - 1, caption: t === 1 ? "training step 1: b starts at 0, count the load, then nudge every b by ±γ" : `training step ${t}: route with the current b, count the load, nudge b again`, vars: () => [["training step", `${t}`], ["load CV", SIM[t - 1].cv.toFixed(2)]] });
 const W = 860, H = 430;
 const HG = { x0: 50, cw: 84, ch: 34, y0: 56 }; // heat-map grid: few cells, so draw them big
 const DSC = devScores(DEV.SEED);
@@ -37,14 +39,14 @@ const BLOCKS = [
     "f = N/(K*T) * onehot(idx).sum((0, 1))   # [T,K,N] → sum over T,K → [N] · f[i] = expert i's share of routes (1 = fair)",
     "P = (s / s.sum(-1, keepdim=True)).mean(0)   # [T,N] / (sum over N → [T,1]) → [T,N] → mean over T → [N] · P[i] = expert i's avg soft score",
     "L_bal = alpha * (f * P).sum()   # [N]·[N] → [N] → sum over N → scalar · alpha = loss weight"] },
-  { id: "bias", label: "bias steers selection", sub: "loss-free", code: [
-    "idx = topk(s + b, K)   # s [T,N] + b [N] → [T,N] → top-K over N → [T,K] · b[i] = expert i's bias, used only to pick",
-    "g   = s[idx] / s[idx].sum(-1, keepdim=True)   # [T,K] · uses the raw s, not s + b"] },
   { id: "monitor", label: "monitor expert load", sub: "whole batch, every step", code: [
     "load = onehot(idx).sum((0, 1))   # [T,K,N] → sum over T,K → [N] · load[i] = tokens expert i received"] },
   { id: "update", label: "bias update", sub: "± γ", code: [
     "err = load.mean() - load   # mean over N → scalar; load [N] → err [N] · err[i] > 0: expert i is underloaded",
     "b  += gamma * sign(err)   # [N] · gamma = step size; b[i] goes up if underloaded, down if overloaded"] },
+  { id: "bias", label: "bias steers selection", sub: "loss-free", code: [
+    "idx = topk(s + b, K)   # s [T,N] + b [N] → [T,N] → top-K over N → [T,K] · b[i] = expert i's bias, used only to pick",
+    "g   = s[idx] / s[idx].sum(-1, keepdim=True)   # [T,K] · uses the raw s, not s + b"] },
   { id: "loop", label: "repeat each training step", sub: "balance emerges", loop: true, code: [
     "for step in training:   # one batch per step",
     "    idx  = topk(s + b, K)   # [T,K]",
@@ -71,11 +73,12 @@ const STEPS = [
   { id: "f", block: "aux", lines: [0], scene: "aux", stage: 0, caption: "f_i: how much of its fair share each expert got", vars: () => [["f", `[${AUX.f.map((x) => f2(x)).join(" ")}]`]] },
   { id: "P", block: "aux", lines: [1], scene: "aux", stage: 1, caption: "P_i: how much the router likes each expert (smooth)", vars: () => [["Σ P", "1"]] },
   { id: "L", block: "aux", lines: [2], scene: "aux", stage: 2, caption: "L_bal = α·Σ f_i·P_i: gradient pushes busy experts down", vars: () => [["Σ f·P", AUX.loss.toFixed(2), "bad"], ["balanced", "1.00"]] },
-  { id: "select", block: "bias", lines: [0, 1], visAt: 0, scene: "bias", caption: "add b to the score to choose experts; gate keeps raw s", vars: () => [["select", "s + b"], ["weight", "s"]] },
-  { id: "monitor", block: "monitor", lines: [0], scene: "monitor", caption: "count tokens per expert over the whole batch", vars: () => [["batch", `${LB.m} tokens`], ["mean load", `${(LB.m * k) / n}`]] },
+  { id: "monitor", block: "monitor", lines: [0], scene: "monitor", caption: "training step 1: route a bigger batch (64 tokens) with b = 0 and count tokens per expert", vars: () => [["batch", `${LB.m} tokens`], ["mean load", `${(LB.m * k) / n}`]] },
   { id: "err", block: "update", lines: [0], scene: "update", stage: 0, caption: "error: how far each expert is from the mean load", vars: () => [["γ", `${GAMMA}`]] },
   { id: "update", block: "update", lines: [1], scene: "update", stage: 1, caption: "overloaded: b − γ · underloaded: b + γ", vars: () => [["γ", `${GAMMA}`], ["paper γ", "0.001"]] },
-  ...SNAPS.map((t) => ({ id: `t${t}`, block: "loop", lines: [1, 2, 3], visAt: 2, scene: "loop", t, caption: `after ${t} training step${t > 1 ? "s" : ""}: load flattens`, vars: () => [["step", `${t}`], ["load CV", SIM[t].cv.toFixed(2)]] })),
+  { id: "select", block: "bias", lines: [0, 1], visAt: 0, scene: "bias", t: 1, prev: 0, caption: `use the b from step 1 on the 8-token toy: only ${repicked(SIM[1].b)} of ${TT} tokens change their picks`, vars: () => [["bias after", "1 step"], ["select", "s + b"], ["weight", "s"]] },
+  ...LOOPT.map(loopStep),
+  { id: "select10", block: "bias", lines: [0, 1], visAt: 0, scene: "bias", t: 10, prev: 1, caption: `the b after 10 training steps on the same 8 tokens: ${repicked(SIM[10].b)} of ${TT} tokens now pick differently`, vars: () => [["bias after", "20 steps"], ["select", "s + b"], ["weight", "s"]] },
   { id: "dscore", block: "devroute", lines: [0], scene: "devroute", stage: 0, caption: "device score = sum of the top K/M affinities of its experts", vars: () => [["K", `${DEV.K}`], ["M", `${DEV.M}`], ["K/M", `${DEV.K / DEV.M}`]] },
   { id: "dtop", block: "devroute", lines: [1], scene: "devroute", stage: 1, caption: "keep only the M best devices", vars: () => [["keep", RR[0].keep.map((d) => `D${d}`).join(" ")]] },
   { id: "dmask", block: "devroute", lines: [2], scene: "devroute", stage: 2, caption: "experts on the other devices are masked out", vars: () => [["eligible", `${RR[0].eligible.length} of ${DEV.E}`]] },
@@ -141,7 +144,7 @@ function AreaModel({ x, y, w, h, f, P, hl, onPick, e }) {
   );
 }
 
-function Heat({ scores, rt, base, stage, bias, e = 1 }) {
+function Heat({ scores, rt, base, stage, bias, bias0 = ZERO, e = 1 }) {
   const { x0, cw, ch, y0 } = HG;
   return (
     <g>
@@ -149,7 +152,7 @@ function Heat({ scores, rt, base, stage, bias, e = 1 }) {
         <text key={j} x={x0 + j * cw + cw / 2 - 2} y={y0 - 10} textAnchor="middle" fontFamily={mono} fontSize="12" fontWeight="700" fill={XC[j]}>E{j}</text>
       ))}
       {bias && Array.from({ length: n }, (_, j) => {
-        const v = bias[j] * e, hh = Math.min(12, Math.abs(v) * 110);
+        const v = lerp(bias0[j], bias[j], e), hh = Math.min(12, Math.abs(v) * 110);
         const base = y0 - 30;
         return <rect key={j} x={x0 + j * cw + 6} y={v >= 0 ? base - hh : base} width={cw - 14} height={Math.max(hh, 1)} rx={2} fill={v >= 0 ? T.accent : T.bad} opacity={0.85} />;
       })}
@@ -170,7 +173,7 @@ function Heat({ scores, rt, base, stage, bias, e = 1 }) {
               if (stage === 0) { shown = lerp(logit(s), s, e); tint = lerp(0.35, s, e); } // logit z → sigmoid(z)
               else if (stage === 1.5 && on && !bias) shown = lerp(s, s / gsum, e); // s → s / Σ s_sel
               else if (stage > 1.5 && on && !bias) shown = s / gsum; // later steps keep the finished gate
-              else if (bias) shown = s + e * bias[j]; // s → s + b
+              else if (bias) shown = s + lerp(bias0[j], bias[j], e); // s → s + b
               return (
                 <g key={j} opacity={stage >= 1 && !on ? (topkAnim ? lerp(1, 0.28, e) : bias ? 0.28 : 0.28) : 1} transform={topkAnim && on ? `translate(0,${-2 * e})` : undefined}>
                   <rect
@@ -269,7 +272,28 @@ function Scene({ step, ex, setEx }) {
     const E = `\\mathrm{E}_{${ex}}`;
     body = (
       <g>
-        <Bars x={20} y={70} w={250} h={180} values={AUX.f.map((v) => v * (st === 0 ? e : 1))} max={Math.max(...AUX.f) * 1.12} ideal={1} fmt={f2} title="f_i  (FRACTION ROUTED)" hl={ex} onPick={setEx} flag={AUX.f.map((v, j) => (v > 1.5 ? j : -1)).filter((j) => j >= 0)} />
+        {st === 1 ? (
+          <g fontFamily={mono} fontSize="11.5">
+            <text x={20} y={62} fontSize="10" letterSpacing="0.1em" fill={T.dim}>{`P_${ex}: ONE ROW PER TOKEN, EXPERT ${ex}`}</text>
+            {["token", `s_${ex}`, "Σ_j s_j", "ratio"].map((h, i) => <text key={h} x={[20, 84, 148, 214][i]} y={84} fill={T.dim}>{h}</text>)}
+            {SEQ.map((_, t) => {
+              const q = ease(clamp01((e * (TT + 1) - t) / 1)), y = 104 + t * 18;
+              return (
+                <g key={t}>
+                  <text x={20} y={y} fill={T.soft}>x{t}</text>
+                  <text x={84} y={y} fill={col}>{d2(SEQ[t][ex])}</text>
+                  <text x={148} y={y} fill={T.soft}>{d2(rowSum(t))}</text>
+                  <text x={214} y={y} fill={col} fontWeight="700" fillOpacity={q}>{d2(SEQ[t][ex] / rowSum(t))}</text>
+                </g>
+              );
+            })}
+            <line x1={20} x2={262} y1={250 - 6} y2={250 - 6} stroke={T.rule} />
+            <text x={148} y={262} fill={T.soft} textAnchor="end">mean of ratios =</text>
+            <text x={214} y={262} fill={col} fontWeight="700" fillOpacity={ease(clamp01(e * 2 - 1))}>{d2(AUX.P[ex])}</text>
+          </g>
+        ) : (
+          <Bars x={20} y={70} w={250} h={180} values={AUX.f.map((v) => v * (st === 0 ? e : 1))} max={Math.max(...AUX.f) * 1.12} ideal={1} fmt={f2} title="f_i  (FRACTION ROUTED)" hl={ex} onPick={setEx} flag={AUX.f.map((v, j) => (v > 1.5 ? j : -1)).filter((j) => j >= 0)} />
+        )}
         {st >= 1 && <Bars x={305} y={70} w={250} h={180} values={AUX.P.map((v) => v * (st === 1 ? e : 1))} max={Math.max(...AUX.P) * 1.12} ideal={1 / n} fmt={f2} title="P_i  (MEAN SOFT SCORE)" hl={ex} onPick={setEx} arrows={st >= 2 ? AUX.f.map((v) => (v > 1 ? -1 : 0)) : null} />}
         {st >= 2 && <AreaModel x={590} y={70} w={250} h={180} f={AUX.f} P={AUX.P} hl={ex} onPick={setEx} e={e} />}
         <Tex x={20} y={284} w={820} h={42} size={14} color={T.ink} tex={`f_{${E}}=\\dfrac{N}{K\\,T}\\,n_{${E}}=\\dfrac{${n}}{${k}\\cdot ${TT}}\\cdot ${c(AUX.cnt[ex])}=${c(d2(AUX.f[ex]))}`} />
@@ -280,17 +304,56 @@ function Scene({ step, ex, setEx }) {
       </g>
     );
   } else if (step.scene === "bias") {
-    const rb = route(SEQ, BIAS_DEMO);
-    const lb = loadsOf(rb);
+    // bias after step.prev training steps -> after step.t: the picture runs through every step in between
+    const t0 = step.prev, t1 = step.t;
+    const b0 = SIM[t0].b, b1 = SIM[t1].b;
+    const r0 = route(SEQ, b0), rb = route(SEQ, b1);
+    const l0 = loadsOf(r0), lb = loadsOf(rb);
+    const tn = Math.round(lerp(t0, t1, e)); // training steps counted so far
+    const bNow = b0.map((v, j) => lerp(v, b1[j], e));
+    const hist = SIM.slice(0, t1), mu25 = (l) => l.reduce((a2, v) => a2 + v, 0) / l.length;
+    const sgn = (r) => (r.loads[ex] < mu25(r.loads) ? 1 : r.loads[ex] > mu25(r.loads) ? -1 : 0);
+    const up = hist.slice(0, tn).filter((r) => sgn(r) > 0).length, down = hist.slice(0, tn).filter((r) => sgn(r) < 0).length;
+    const bv = SIM[tn].b[ex], cl = `{\\color{${XC[ex]}}\\mathbf{${bv >= 0 ? "+" : "-"}${Math.abs(bv).toFixed(2)}}}`;
+    const cw2 = Math.min(13.6, 330 / t1);
     body = (
       <g>
-        <Heat scores={SEQ} rt={rb} base={rt0} stage={1} bias={BIAS_DEMO} e={e} />
-        <text x={50} y={10} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim}>BIAS b_j (ABOVE) · SELECT BY s + b</text>
-        <Bars x={500} y={90} w={330} h={190} values={loadsOf(rt0).map((v, j) => lerp(v, lb[j], e))} ideal={(TT * k) / n} fmt={(v) => v.toFixed(0)} max={Math.max(...loadsOf(rt0), ...lb) * 1.12} title="TOKENS PER EXPERT WITH BIAS" />
+        <Heat scores={SEQ} rt={rb} base={r0} stage={1} bias={b1} bias0={b0} e={e} />
+        <text x={50} y={10} fontFamily={mono} fontSize="10" letterSpacing="0.1em" fill={T.dim}>BAR ABOVE EACH COLUMN = BIAS b_j (GREEN +, RED −) · SELECT BY s + b</text>
+        {/* the bias value of every expert, spelled out under its own column */}
+        <g fontFamily={mono} textAnchor="middle">
+          <text x={HG.x0 - 8} y={362} textAnchor="end" fontSize="12" fontWeight="700" fill={T.wire}>b_j</text>
+          <text x={HG.x0 - 8} y={384} textAnchor="end" fontSize="11" fill={T.dim}>load</text>
+          {Array.from({ length: n }, (_, j) => {
+            const v = bNow[j], cx = HG.x0 + j * HG.cw + HG.cw / 2 - 2;
+            return (
+              <g key={j}>
+                <text x={cx} y={362} fontSize="14" fontWeight="700" fill={v >= 0 ? T.accent : T.bad}>{`${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}`}</text>
+                <text x={cx} y={384} fontSize="11" fill={T.soft}>{`${l0[j]} → ${Math.round(lerp(l0[j], lb[j], e))}`}</text>
+              </g>
+            );
+          })}
+          <text x={HG.x0} y={406} textAnchor="start" fontSize="11" fill={T.dim}>b &lt; 0: was overloaded, harder to pick</text>
+          <text x={HG.x0} y={422} textAnchor="start" fontSize="11" fill={T.dim}>b &gt; 0: was underloaded, easier to pick</text>
+        </g>
+        <Bars x={500} y={80} w={330} h={150} values={l0.map((v, j) => lerp(v, lb[j], e))} ideal={(TT * k) / n} fmt={(v) => v.toFixed(0)} max={Math.max(...l0, ...lb, 6) * 1.12} title="TOKENS PER EXPERT WITH BIAS" idealLabel="" hl={ex} onPick={setEx} />
         <g fontFamily={mono} fontSize="11" fill={T.soft}>
-          <text x={500} y={330}><tspan fill={T.accent2}>▢</tspan> newly chosen because of b</text>
-          <text x={500} y={350}><tspan fill={T.wire}>⬚</tspan> dropped because of b</text>
-          <text x={500} y={376} fill={T.dim}>gate g still computed from raw s</text>
+          <text x={500} y={264}><tspan fill={T.accent2}>▢</tspan> newly chosen because of b</text>
+          <text x={500} y={280}><tspan fill={T.wire}>⬚</tspan> dropped because of b · dashed line = fair share {(TT * k) / n}</text>
+          <text x={500} y={296} fill={T.dim}>gate g still computed from raw s</text>
+        </g>
+        {/* how b itself is calculated: the sign update, one training step at a time */}
+        <Tex x={500} y={304} w={350} h={30} size={13} color={T.ink} tex={t1 === 1 ? `b_j=\\gamma\\,\\mathrm{sign}\\big(\\bar\\ell-\\ell_j\\big)` : `b_j=\\gamma\\sum_{t=1}^{${t1}}\\mathrm{sign}\\big(\\bar\\ell-\\ell_j^{(t)}\\big)`} />
+        <Tex x={500} y={330} w={350} h={34} size={13} color={T.accent2} tex={`b_{${ex}}=${GAMMA}\\cdot\\big({\\color{${T.accent}}${up}}-{\\color{${T.bad}}${down}}\\big)=${cl}`} />
+        {/* one cell per training step (= one batch of 64 tokens): did E{ex} get fewer or more tokens than the fair share? */}
+        {hist.map((r, t) => {
+          const d = sgn(r);
+          return <rect key={t} x={500 + t * cw2} y={366} width={cw2 - 2.6} height={12} rx={2} fill={d > 0 ? T.accent : d < 0 ? T.bad : T.rule} opacity={t < tn ? 0.9 : 0.15} />;
+        })}
+        <g fontFamily={mono} fontSize="11">
+          <text x={500} y={392} fill={T.accent}>■ {up} {up === 1 ? "step" : "steps"}: E{ex} got FEWER than {mu} tokens → +{GAMMA}</text>
+          <text x={500} y={406} fill={T.bad}>■ {down} {down === 1 ? "step" : "steps"}: E{ex} got MORE than {mu} tokens → −{GAMMA}</text>
+          <text x={500} y={420} fill={T.dim}>{up + down < tn ? `■ ${tn - up - down} step: exactly ${mu} → no change · ` : ""}each cell = 1 training step (64 tokens)</text>
         </g>
       </g>
     );
@@ -345,16 +408,43 @@ function Scene({ step, ex, setEx }) {
       </g>
     );
   } else if (step.scene === "loop") {
-    const r = SIM[step.t];
-    const pr = SIM[SNAPS[SNAPS.indexOf(step.t) - 1] ?? 0]; // the snapshot before this one
-    const mix = (a, b) => a.map((v, j) => lerp(v, b[j], e));
+    // training step t: the batch is routed with the current b (= SIM[t-1].b), its load is counted, then b is nudged to SIM[t].b
+    const t = step.t, a0 = SIM[Math.max(step.prev - 1, 0)], a1 = SIM[t - 1], bNext = SIM[t].b;
+    const eL = ease(clamp01(p / 0.5)), eB = ease(clamp01((p - 0.5) / 0.5)); // load first, then the bias update
+    const loadsNow = a1.loads.map((v, j) => lerp(a0.loads[j], v, eL));
+    const bNow = a1.b.map((v, j) => lerp(v, bNext[j], eB));
+    const sf = (v) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}`;
+    const dv = a1.loads.map((v) => v - mu); // > 0: more tokens than the fair share
+    const colX = (j) => 150 + j * 110;
+    const names = (pick) => dv.map((d, j) => (pick(d) ? `E${j}` : null)).filter(Boolean).join(" ") || "none";
     body = (
       <g>
-        <Bars x={20} y={70} w={260} h={190} values={mix(pr.loads, r.loads)} ideal={mu} title="LOAD THIS STEP" />
-        <Bars x={305} y={70} w={260} h={190} values={mix(pr.b, r.b)} min={-0.3} max={0.3} fmt={(v) => f2(v)} title="BIAS b_j" />
-        <Lines x={600} y={70} w={240} h={190} series={[{ pts: SIM.map((q) => q.cv), color: T.accent2, label: "load CV" }]} ymax={1} upTo={step.t} title="IMBALANCE OVER TIME" />
-        <text x={20} y={310} fontFamily={mono} fontSize="12" fill={T.soft}>step {step.t} · bias of popular experts sinks, rare ones rise</text>
-        <text x={20} y={334} fontFamily={mono} fontSize="11" fill={T.dim}>γ = {GAMMA} here; the paper uses 0.001 over many more steps</text>
+        {/* the loop trains on bigger batches than the 8-token toy: say so, and show where 32 comes from */}
+        <text x={20} y={22} fontFamily={mono} fontSize="12.5" fontWeight="700" fill={T.wire}>each training step = a NEW batch of {LB.m} tokens (not the 8-token toy)</text>
+        <text x={20} y={42} fontFamily={mono} fontSize="11.5" fill={T.soft}>{LB.m} tokens × top-{k} = {LB.m * k} picks, shared by {n} experts → fair share {LB.m * k} / {n} = {mu}</text>
+        <Bars x={20} y={70} w={260} h={190} values={loadsNow} ideal={mu} title={`TOKENS PER EXPERT · STEP ${t}`} />
+        <Bars x={305} y={70} w={260} h={190} values={bNow} min={-0.3} max={0.3} fmt={(v) => f2(v)} title="BIAS b_j AFTER THE UPDATE" />
+        <Lines x={600} y={70} w={240} h={190} series={[{ pts: SIM.map((q) => q.cv), color: T.accent2, label: "load CV" }]} ymax={1} upTo={t - 1} title="IMBALANCE OVER TIME" />
+        {/* the numbers, expert by expert: load, distance from the fair share, which way b moves, b before -> after */}
+        <g fontFamily={mono} fontSize="11.5">
+          {["tokens", `vs fair ${mu}`, "b moves", "bias b"].map((lab, r) => <text key={lab} x={20} y={310 + r * 18} fill={T.dim}>{lab}</text>)}
+          {Array.from({ length: n }, (_, j) => (
+            <g key={j} textAnchor="middle">
+              <text x={colX(j)} y={292} fontWeight="700" fill={XC[j]}>E{j}</text>
+              <text x={colX(j)} y={310} fill={T.ink}>{Math.round(loadsNow[j])}</text>
+              <text x={colX(j)} y={328} fontWeight="700" fill={dv[j] > 0 ? T.bad : dv[j] < 0 ? T.accent : T.dim} fillOpacity={eL}>{dv[j] > 0 ? `+${dv[j]} more` : dv[j] < 0 ? `${dv[j]} fewer`.replace("-", "−") : "equal"}</text>
+              <text x={colX(j)} y={346} fontWeight="700" fill={dv[j] > 0 ? T.bad : dv[j] < 0 ? T.accent : T.dim} fillOpacity={eB}>{dv[j] > 0 ? `−${GAMMA}` : dv[j] < 0 ? `+${GAMMA}` : "0"}</text>
+              <text x={colX(j)} y={364} fill={T.soft}>{`${sf(a1.b[j])} → ${sf(bNow[j])}`}</text>
+            </g>
+          ))}
+        </g>
+        <Tex x={600} y={284} w={250} h={44} size={13.5} color={T.accent2} tex={`\\mathrm{CV}=\\dfrac{\\mathrm{std}(\\ell)}{\\bar\\ell}=\\dfrac{${cvStd(a1.loads).toFixed(1)}}{${mu}}=\\mathbf{${a1.cv.toFixed(2)}}`} />
+        <text x={600} y={346} fontFamily={mono} fontSize="11" fill={T.dim}>CV = std(tokens) / mean tokens</text>
+        <text x={600} y={362} fontFamily={mono} fontSize="11" fill={T.dim}>0 = perfectly even</text>
+        <g fontFamily={mono} fontSize="11.5">
+          <text x={20} y={396} fill={T.bad}>{names((d) => d > 0)}: more than {mu} tokens → b goes DOWN by {GAMMA} (picked less next time)</text>
+          <text x={20} y={414} fill={T.accent}>{names((d) => d < 0)}: fewer than {mu} tokens → b goes UP by {GAMMA} (picked more next time)</text>
+        </g>
       </g>
     );
   } else if (step.scene === "devroute") {

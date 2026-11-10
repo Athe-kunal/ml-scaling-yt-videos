@@ -19,7 +19,7 @@ import GroupScene from "./GroupScene";
 // slow, and exactly as granular, as the GShard tab's own pass1/pass2.
 
 const { G, S, E } = CFG;
-const FACTORS = [0.5, 1, 2, 3]; // → C = round(factor · S/E)
+const FACTORS = [0.5, 1, 2, 3]; // → C = ceil(factor · S/E)
 const f2 = (x) => x.toFixed(2);
 
 function katexHtml(tex) {
@@ -34,16 +34,17 @@ const Eq = ({ tex, style }) => <span style={style} dangerouslySetInnerHTML={{ __
 // The five formulas this page walks through, always visible so you can check
 // a step's numbers against the symbol they came from.
 const FORMULAS = [
-  { k: "capacity", label: "capacity factor", tex: "C=\\mathrm{round}\\!\\left(\\dfrac{\\text{capacity\\_factor}\\cdot S}{E}\\right)" },
+  { k: "capacity", label: "capacity factor", tex: "C=\\left\\lceil\\dfrac{\\text{capacity\\_factor}\\cdot S}{E}\\right\\rceil" },
   { k: "fill1", label: "expert assignment", tex: "g_1,e_1,g_2,e_2=\\mathrm{top\\_2}\\big(\\mathrm{softmax}(W_g\\!\\cdot\\!x_s)\\big),\\quad \\tilde g_i=\\dfrac{g_i}{g_1+g_2}" },
   { k: "fill1b", label: "overflow (1st choice)", tex: "\\text{keep at }e_1 \\iff c_{e_1} < C \\quad\\text{(first-come-first-served, token order)}" },
   { k: "fill2", label: "overflow (2nd choice)", tex: "\\text{keep at }e_2 \\iff c_{e_2} < C \\ \\text{and}\\ 2\\tilde g_2 > u,\\quad u\\sim\\mathrm{Uniform}(0,1)" },
   { k: "cv", label: "load balance", tex: "CV=\\dfrac{\\mathrm{std}(\\text{load}_E)}{\\mathrm{mean}(\\text{load}_E)}" },
+  { k: "me", label: "m_e (mean gate)", tex: "m_e=\\dfrac{1}{S}\\sum_{s=1}^{S} g_{s,e},\\quad g_{s,\\cdot}=\\mathrm{softmax}(W_g\\!\\cdot\\!x_s)" },
   { k: "aux", label: "ℓ_aux", tex: "\\ell_{aux}=\\dfrac{1}{E}\\sum_e \\dfrac{c_e}{S}\\,m_e" },
 ];
 
 const BLOCKS = [
-  { id: "capacity", label: "capacity factor", sub: "buffer size per expert, per group", code: ["C = round(capacity_factor · S / E)"] },
+  { id: "capacity", label: "capacity factor", sub: "buffer size per expert, per group", code: ["C = ceil(capacity_factor · S / E)   # round UP: never below the fair share"] },
   {
     id: "fill1", label: "1st choice: assign & fill", sub: "one token at a time", loop: true,
     code: [
@@ -71,6 +72,7 @@ const BLOCKS = [
     ],
   },
   { id: "cv", label: "load balance", sub: "coefficient of variation", code: ["CV = std(load_E) / mean(load_E)   # 0 = perfectly even"] },
+  { id: "mean", label: "m_e: mean gate", sub: "average each column over the S tokens", code: ["m_E = mean(gates, over S)   # [E], each entry = column average"] },
   { id: "aux", label: "ℓ_aux, term by term", sub: "the differentiable stand-in", code: ["ℓ_aux = (1/E) · Σ_e (c_e/S) · m_e"] },
 ];
 
@@ -146,9 +148,9 @@ function Formulas({ active }) {
     <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: "12px 16px", display: "grid", gap: 8 }}>
       <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.12em", color: T.dim }}>FORMULAS ON THIS PAGE</div>
       {FORMULAS.map((f) => (
-        <div key={f.k} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "4px 6px", borderRadius: 6, background: active === f.k ? `${T.wire}14` : "transparent" }}>
-          <span style={{ fontFamily: mono, fontSize: 10, color: active === f.k ? T.wire : T.dim, width: 118, flexShrink: 0 }}>{f.label}</span>
-          <Eq tex={f.tex} style={{ fontSize: 13.5, color: active === f.k ? T.ink : T.soft, overflowX: "auto" }} />
+        <div key={f.k} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "4px 6px", borderRadius: 6, background: (active === f.k || (active === "aux" && f.k === "me")) ? `${T.wire}14` : "transparent" }}>
+          <span style={{ fontFamily: mono, fontSize: 10, color: (active === f.k || (active === "aux" && f.k === "me")) ? T.wire : T.dim, width: 118, flexShrink: 0 }}>{f.label}</span>
+          <Eq tex={f.tex} style={{ fontSize: 13.5, color: (active === f.k || (active === "aux" && f.k === "me")) ? T.ink : T.soft, overflowX: "auto" }} />
         </div>
       ))}
     </div>
@@ -188,13 +190,17 @@ function CVScene({ load }) {
 export default function CapacityView() {
   const [factor, setFactor] = useState(2);
   const [g, setG] = useState(0);
-  const C = Math.max(1, Math.round((factor * S) / E));
+  const fair = (factor * S) / E; // exact slots per expert at this factor, before rounding up
+  const capNote = `${factor}× fair share = ${f2(fair)}${Number.isInteger(fair) ? "" : ", rounded up"}`;
+  const C = Math.max(1, Math.ceil((factor * S) / E));
   const model = useMemo(() => buildModel(SEED, E, C), [factor]);
   const gm = model.groups[g];
 
+  const mTop = gm.m.indexOf(Math.max(...gm.m)); // the expert the router likes most: its column makes the clearest example
   const simpleSteps = [
-    { id: "capacity", block: "capacity", lines: [0], caption: `factor ${factor}× → C = round(${factor} · ${S}/${E}) = ${C} slots per expert, per group`, vars: () => [["C", `${C}`], ["factor", `${factor}×`]] },
+    { id: "capacity", block: "capacity", lines: [0], caption: `factor ${factor}× → C = ceil(${factor} · ${S}/${E}) = ceil(${f2(fair)}) = ${C} slots per expert, per group`, vars: () => [["C", `${C}`], ["factor", `${factor}×`]] },
     { id: "cv", block: "cv", lines: [0], caption: "how evenly the real, post-capacity load lands across experts", vars: () => [["load", `[${model.load.join(", ")}]`]] },
+    { id: "mean", block: "mean", lines: [0], caption: `m_e = column average of the gates: e.g. m_${mTop} = (${gm.gates.map((r) => f2(r[mTop])).join(" + ")}) / ${S} = ${f2(gm.m[mTop])}`, vars: () => [["m_E", `[${gm.m.map((x) => f2(x)).join(", ")}]`]] },
     { id: "aux", block: "aux", lines: [0], caption: `group ${g}: the exact sum that produces ℓ_aux = ${gm.aux.toFixed(3)}`, vars: () => [["ℓ_aux", gm.aux.toFixed(3)]] },
   ];
   const byId = Object.fromEntries(expand(simpleSteps).map((s, i) => [`${s.sid}:${i}`, s]));
@@ -204,10 +210,11 @@ export default function CapacityView() {
     ...fill2Steps(gm, C),
     ...expand([simpleSteps[1]]),
     ...expand([simpleSteps[2]]),
+    ...expand([simpleSteps[3]]),
   ];
   void byId; // kept for clarity of intent; Stepper only needs the flat array below
 
-  const activeFormula = (sid) => (sid === "capacity" ? "capacity" : sid === "fill1" ? "fill1" : sid === "fill2" ? "fill2" : sid === "cv" ? "cv" : "aux");
+  const activeFormula = (sid) => (sid === "capacity" ? "capacity" : sid === "fill1" ? "fill1" : sid === "fill2" ? "fill2" : sid === "cv" ? "cv" : sid === "mean" ? "me" : "aux");
 
   return (
     <Stepper
@@ -238,11 +245,12 @@ export default function CapacityView() {
         // phase individually) — just replayed at whatever capacity factor is
         // picked above. stage 3 = 1st choice fills the buffers, stage 5 = 2nd
         // choice (capacity + dice), stage 4 = the aux-loss sum building term by term.
-        item.sid === "capacity" ? <GroupScene gm={gm} stage={3} C={C} />
-          : item.sid === "fill1" ? <GroupScene gm={gm} stage={3} C={C} loop={item.loop} line={item.line} />
-          : item.sid === "fill2" ? <GroupScene gm={gm} stage={5} C={C} loop={item.loop} line={item.line} />
+        item.sid === "capacity" ? <GroupScene gm={gm} stage={3} C={C} capNote={capNote} />
+          : item.sid === "fill1" ? <GroupScene gm={gm} stage={3} C={C} capNote={capNote} loop={item.loop} line={item.line} />
+          : item.sid === "fill2" ? <GroupScene gm={gm} stage={5} C={C} capNote={capNote} loop={item.loop} line={item.line} />
           : item.sid === "cv" ? <CVScene load={model.load} />
-          : <GroupScene gm={gm} stage={4} C={C} />
+          : item.sid === "mean" ? <GroupScene gm={gm} stage={1} C={C} capNote={capNote} />
+          : <GroupScene gm={gm} stage={4} C={C} capNote={capNote} />
       }
       extra={(item) => <Formulas active={activeFormula(item.sid)} />}
       legend={<span>C = per-expert, per-group buffer · ℓ_aux is added to the loss as <span style={{ color: T.wire }}>L = ℓ_nll + k·ℓ_aux</span> · gate is softmax everywhere on this page (see "Gating functions" for alternatives)</span>}

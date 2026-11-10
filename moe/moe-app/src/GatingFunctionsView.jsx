@@ -85,11 +85,13 @@ const BLOCKS = [
     "z = x @ Wg   # x [d] @ Wg [d,N] → [N] · z[j] = this token's raw score for expert j, N=4"] },
   { id: "score", label: "two ways to score", sub: "same z, different curve", code: [
     "s_soft = softmax(z)   # [N] → [N] · e^z[j] / Σ_j e^z[j], sum over N experts → scores sum to 1 (experts compete)",
-    "s_sig = sigmoid(z)   # [N] → [N] · 1 / (1 + e^-z[j]) · each in (0,1), independent of the others"] },
+    "s_sig = sigmoid(z)   # [N] → [N] · 1 / (1 + e^-z[j]) · each in (0,1), independent of the others",
+    "s_sp = sqrt(softplus(z))   # [N] → [N] · sqrt(ln(1 + e^z[j])) · each ≥ 0, no cap, independent of the others"] },
   { id: "couple", label: "who influences whom", sub: "change one expert, watch the rest", code: [
     "z[3] = 2.5   # change ONE expert's logit (z [N]), then recompute the scores",
     "s_soft[j] = exp(z[j]) / exp(z).sum()   # denominator sums over ALL N experts → a bigger E3 shrinks E0..E2",
-    "s_sig[j] = 1 / (1 + exp(-z[j]))   # uses z[j] only → E0..E2 do not move"] },
+    "s_sig[j] = 1 / (1 + exp(-z[j]))   # uses z[j] only → E0..E2 do not move",
+    "s_sp[j] = sqrt(log(1 + exp(z[j])))   # uses z[j] only → E0..E2 do not move"] },
   { id: "conf", label: "router gets confident", sub: "z → c·z, watch g[0]", loop: "c: 1 → 6", code: [
     "z = c * z   # [N] · c = confidence, 1 → 6 · same ranking, bigger gaps",
     "g = s[idx] / s[idx].sum()   # [2] · weights of the 2 chosen experts, sum over them = 1 · g[0] = top expert's weight"] },
@@ -99,7 +101,9 @@ const STEPS = [
   { id: "logits", block: "logits", lines: [0], scene: "score", kind: null, caption: "one token, four router logits", vars: () => [["z", `[${ZF.map(f1).join(", ")}]`]] },
   { id: "soft", block: "score", lines: [0], scene: "score", kind: "soft", caption: "softmax: exponentiate and divide by the total, scores compete", vars: () => [["Σ scores", f2(sum(SCORE.soft(ZF)))]] },
   { id: "sig", block: "score", lines: [1], scene: "score", kind: "sig", caption: "sigmoid: every expert squashed on its own into (0,1)", vars: () => [["Σ scores", f2(sum(SCORE.sig(ZF)))]] },
-  { id: "couple", block: "couple", lines: [0, 1, 2], visAt: 0, scene: "couple", caption: "softmax: raise E3 and everyone else drops. sigmoid: the others stay put", vars: () => [["E3 logit", `${ZF[3]} → ${COUPLE_Z}`]] },
+  { id: "sp", block: "score", lines: [2], scene: "score", kind: "sp", caption: "sqrt-softplus: also per expert, but with no upper cap", vars: () => [["Σ scores", f2(sum(SCORE.sp(ZF)))]] },
+  { id: "side", block: "score", lines: [0, 1, 2], visAt: 0, scene: "side", caption: "same z, three scorers side by side: same ranking, different sizes", vars: () => GATES.map((g) => [g.name + " Σ", f2(sum(SCORE[g.id](ZF)))]) },
+  { id: "couple", block: "couple", lines: [0, 1, 2, 3], visAt: 0, scene: "couple", caption: "softmax: raise E3 and everyone else drops. sigmoid and sqrt-softplus: the others stay put", vars: () => [["E3 logit", `${ZF[3]} → ${COUPLE_Z}`]] },
   { id: "conf", block: "conf", lines: [0, 1], visAt: 0, scene: "conf", caption: "more confident router: softmax runs to top-1, sigmoid to an equal split, sqrt-softplus in between", vars: () => GATES.map((g) => [g.name + " g0 @c=6", f2(w1At(g.id, CMAX))]) },
 ];
 
@@ -220,6 +224,31 @@ function Scene({ step, J }) {
             <Tex x={450} y={180} w={400} h={34} size={14} tex={`z=[${ZF.map((v, j) => cc(XC[j], f1(v))).join(",\\;")}]`} />
           </g>
         )}
+      </g>
+    );
+  } else if (step.scene === "side") {
+    const EQ = {
+      soft: `\\dfrac{e^{z_j}}{\\sum_i e^{z_i}}`,
+      sig: `\\dfrac{1}{1+e^{-z_j}}`,
+      sp: `\\sqrt{\\ln\\!\\left(1+e^{z_j}\\right)}`,
+    };
+    const NOTE = { soft: "shared: scores sum to 1", sig: "independent, each below 1", sp: "independent, no cap" };
+    const idx = topk(ZF);
+    body = (
+      <g>
+        <Tex x={30} y={14} w={800} h={30} size={14} tex={`z=[${ZF.map((v, j) => cc(XC[j], f1(v))).join(",\\;")}]\\quad\\text{same logits into all three}`} />
+        {GATES.map((g, k) => {
+          const sc = SCORE[g.id](ZF);
+          return (
+            <g key={g.id}>
+              <VB x={30 + k * 280} y={62} w={250} h={170} vals={sc.map((v) => v * e)} hi={Math.max(...sc) * 1.25} rings={e > 0.7 ? idx : []} title={g.name.toUpperCase()} />
+              <Tex x={30 + k * 280} y={262} w={250} h={46} size={14} color={g.col} tex={`s_j=${EQ[g.id]}`} opacity={ease(clamp01((p - 0.3) / 0.5))} />
+              <text x={30 + k * 280} y={330} fontFamily={mono} fontSize="12" fill={T.soft}>Σ scores = <tspan fill={g.col} fontWeight="700">{f2(sum(sc))}</tspan></text>
+              <text x={30 + k * 280} y={350} fontFamily={mono} fontSize="11.5" fill={g.col}>{NOTE[g.id]}</text>
+            </g>
+          );
+        })}
+        <text x={30} y={392} fontFamily={mono} fontSize="12.5" fill={T.soft}>ringed = top-2. Every scorer is increasing in z, so the ranking is the same; only the sizes differ.</text>
       </g>
     );
   } else if (step.scene === "topk") {
@@ -373,24 +402,25 @@ function Scene({ step, J }) {
     );
   } else if (step.scene === "couple") {
     const zNew = ZF.map((v, j) => (j === 3 ? lerp(v, COUPLE_Z, e) : v));
-    const kinds = ["soft", "sig"];
+    const kinds = ["soft", "sig", "sp"];
     body = (
       <g>
         <Tex x={40} y={22} w={600} h={30} size={14} tex={`z_3:\ ${cc(XC[3], f2(ZF[3]))}\to ${cc(XC[3], f2(zNew[3]))}\quad (z_0,z_1,z_2\text{ unchanged})`} />
         {kinds.map((k, i) => {
-          const s0 = SCORE[k](ZF), s1 = SCORE[k](zNew), x = 30 + i * 420, hiS = Math.max(...SCORE[k](ZF.map((v, j) => (j === 3 ? COUPLE_Z : v)))) * 1.2;
+          const s0 = SCORE[k](ZF), s1 = SCORE[k](zNew), x = 30 + i * 280, hiS = Math.max(...SCORE[k](ZF.map((v, j) => (j === 3 ? COUPLE_Z : v)))) * 1.2;
           const moved = Math.max(...[0, 1, 2].map((j) => Math.abs(s1[j] - s0[j])));
           return (
             <g key={k}>
-              <VB x={x} y={86} w={380} h={190} vals={s1} ghost={s0} hi={hiS} title={GN[k].toUpperCase()} />
+              <VB x={x} y={86} w={250} h={190} vals={s1} ghost={s0} hi={hiS} title={GN[k].toUpperCase()} />
               <text x={x} y={312} fontFamily={mono} fontSize="11.5" fill={GC[k]} fontWeight="700">E0 score {f3(s0[0])} → {f3(s1[0])}</text>
               <text x={x} y={332} fontFamily={mono} fontSize="11.5" fill={GC[k]}>E1 score {f3(s0[1])} → {f3(s1[1])}</text>
               <text x={x} y={352} fontFamily={mono} fontSize="11" fill={moved > 1e-9 ? T.bad : T.accent}>{moved > 1e-9 ? `E0-E2 moved by up to ${f3(moved)}` : "E0-E2 did not move"}</text>
             </g>
           );
         })}
-        <text x={30} y={384} fontFamily={mono} fontSize="12" fill={T.soft}>softmax: the denominator holds every expert, so one expert growing pushes the rest down. sigmoid: each expert looks only at its own logit.</text>
-        <text x={30} y={404} fontFamily={mono} fontSize="11" fill={T.dim}>dashed = before the change to E3</text>
+        <text x={30} y={380} fontFamily={mono} fontSize="12" fill={T.soft}>softmax: the denominator holds every expert, so one expert growing pushes the rest down.</text>
+        <text x={30} y={400} fontFamily={mono} fontSize="12" fill={T.soft}>sigmoid and sqrt-softplus: each expert looks only at its own logit, so the others stay put.</text>
+        <text x={30} y={420} fontFamily={mono} fontSize="11" fill={T.dim}>dashed = before the change to E3</text>
       </g>
     );
   } else if (step.scene === "advice") {

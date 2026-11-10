@@ -21,7 +21,7 @@ const Z = Array(n).fill(0);
 const B0 = scoresOf(1);
 const RT0 = route(B0, Z);
 const QB0 = qbStep(B0, Z);
-const SIGN = simulate("sign", 60, 0.01);
+const SIGN = simulate("sign", 60, 0.02);
 const SLOW = simulate("sign", 60, 0.003);
 const FAST = simulate("sign", 60, 0.08);
 const QB = simulate("qb", 60);
@@ -239,7 +239,7 @@ function Scene({ step, tok, ex, setEx }) {
   } else if (step.scene === "apply") {
     const sets = [
       ["NO BIAS", Z],
-      ["SIGN STEP γ=0.01 · AFTER 1 UPDATE", SIGN[0].next],
+      ["SIGN STEP γ=0.02 · AFTER 1 UPDATE", SIGN[0].next],
       ["QUANTILE · AFTER 1 UPDATE", QB[0].next],
     ];
     body = (
@@ -254,7 +254,8 @@ function Scene({ step, tok, ex, setEx }) {
             </g>
           );
         })}
-        <text x={20} y={360} fontFamily={mono} fontSize="11" fill={T.dim}>a fresh batch, routed with the bias computed from the previous one</text>
+        <Tex x={20} y={328} w={820} h={50} size={14} color={T.ink} tex={`\\mathrm{CV}=\\dfrac{\\mathrm{std}(\\ell)}{\\bar\\ell},\\quad \\mathrm{std}(\\ell)=\\sqrt{\\tfrac{1}{${n}}\\textstyle\\sum_{j}(\\ell_j-\\bar\\ell)^2},\\quad \\bar\\ell=${MU}\\text{ (fair share)}`} />
+        <text x={20} y={402} fontFamily={mono} fontSize="11" fill={T.dim}>a fresh batch, routed with the bias computed from the previous one</text>
       </g>
     );
   } else {
@@ -264,9 +265,10 @@ function Scene({ step, tok, ex, setEx }) {
     const tl = (R) => lerpArr(R[prevT].loads, R[t].loads, e);
     body = (
       <g>
-        <Lines x={20} y={70} w={390} h={230} series={[{ pts: SIGN.map((q) => q.cv), color: T.wire, label: "sign step γ=0.01" }, { pts: QB.map((q) => q.cv), color: T.accent, label: "quantile" }]} ymax={1} upTo={tn} title="LOAD CV (LOWER = BALANCED)" />
+        <Lines x={20} y={70} w={390} h={230} series={[{ pts: SIGN.map((q) => q.cv), color: T.wire, label: "sign step γ=0.02" }, { pts: QB.map((q) => q.cv), color: T.accent, label: "quantile" }]} ymax={1} upTo={tn} title="LOAD CV (LOWER = BALANCED)" />
         <Bars x={450} y={80} w={390} h={80} values={tl(SIGN)} ideal={MU} title="SIGN STEP · LOAD NOW" max={40} />
         <Bars x={450} y={220} w={390} h={80} values={tl(QB)} ideal={MU} title="QUANTILE · LOAD NOW" max={40} />
+        <Tex x={20} y={376} w={820} h={30} size={13.5} color={T.dim} tex={`\\mathrm{CV}=\\mathrm{std}(\\ell)\\,/\\,\\bar\\ell\\ \\text{ over the }${n}\\text{ experts' loads }\\ell;\\ 0=\\text{even}`} />
         <text x={20} y={340} fontFamily={mono} fontSize="12" fill={T.soft}>CV below 0.3 after: sign step {firstBelow(SIGN, 0.3)} steps · quantile {firstBelow(QB, 0.3)} step</text>
         <text x={20} y={362} fontFamily={mono} fontSize="11" fill={T.dim}>the remaining ~0.2 is sampling noise of a {m}-token batch</text>
       </g>
