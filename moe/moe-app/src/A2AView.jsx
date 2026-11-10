@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useProgress, ease, lerp, clamp01 } from "./anim";
+import { f2 } from "./charts";
 import { T, mono, btn } from "./theme";
 import { CFG, EXPERT_COLORS as EC, SEED, buildModel } from "./moeModel";
 import Stepper from "./Stepper";
@@ -8,18 +8,12 @@ import MoEBlockMap from "./MoEBlockMap";
 // All-to-all as a stepper. D devices each own Ed experts (E = D·Ed in total).
 // Device s holds D token bundles; bundle t carries the tokens bound for the Ed
 // experts living on device t. After the collective, device t holds the bundles
-// from every s: the D×D bundle grid is transposed. Bundle (s→t) is drawn at
-// device s / slot t before it moves and at device t / slot s after it arrives.
+// from every s: the D×D bundle grid is transposed. Each token's journey is set by
+// the router: token chips at home, straight-line moves into the slot of its expert.
 // Schedule shown: D-1 pairwise rounds, round r sends to (d+r) mod D.
 
 const D = CFG.G;
-const W = 860, H = 430;
-const DX = (d) => 20 + d * 210, DW = 190, BY = 92, BH = 300;
-const slotCX = (d, j) => DX(d) + 10 + j * 44 + 20;
-const CY1 = BY + 84, CY2 = BY + 160; // send row, receive row
-const MY = BY + BH - 54; // centre line of the experts' W_up / W_down
 const mod = (a, n) => ((a % n) + n) % n;
-const SHADE = [1, 0.55, 0.8, 0.35]; // one shade per local expert
 
 // everything that depends on the number of experts per device
 const cache = {};
@@ -141,346 +135,50 @@ function makeCfg(Ed) {
   return (cache[Ed] = { Ed, E, C, B, cnt, items, groups: model.groups, tag, BLOCKS, STEPS, GLOSSARY, SHAPES });
 }
 
-// A bundle's route: one smooth curve from its slot in the sender's send row
-// (u = 0) over the wire to its slot in the receiver's recv row (u = 1). The same
-// curve is run backwards on the return trip. Same arcs as the wires drawn above.
-const arcH = (s, t) => 28 + Math.abs(t - s) * 16;
-const route = (s, t, u) => {
-  const x0 = slotCX(s, t), y0 = CY1, x1 = slotCX(t, s), y1 = CY2;
-  if (s === t) return [lerp(x0, x1, u), lerp(y0, y1, u)];
-  const peak = BY - 4 - 0.8 * arcH(s, t);
-  const cx = (x0 + x1) / 2, cy = (4 * peak - y0 - y1) / 2;
-  const a = (1 - u) * (1 - u), b = 2 * u * (1 - u), c = u * u;
-  return [a * x0 + b * cx + c * x1, a * y0 + b * cy + c * y1];
-};
-const hump = (x) => Math.sin(Math.PI * clamp01(x));
-
-// A bundle = the tokens one group sends to one device. Each token is a bar (a
-// vector of M numbers), grouped by local expert (one shade each); dashed bars
-// are padding up to the capacity C. qb → qa is the bundle's position on its
-// route before / after this line; the bars trail the box a little so you see
-// the tokens themselves travel. hb = bar height (M → H → M inside the FFN),
-// act = how much of the activation's zeroing is visible.
-function Bundle({ cfg, s, t, qb, qa, p, e, sel, detail, retNow, hb, act }) {
-  const { C, B, cnt, tag } = cfg;
-  const qNow = lerp(qb, qa, e);
-  const [x, y] = route(s, t, qNow);
-  const moving = qb !== qa;
-  const home = s === t;
-  const c = EC[t];
-  const n = cnt[s][t].reduce((a, v) => a + Math.min(v, C), 0);
-  const pitch = Math.min(9, 38 / B), x0 = -(B * pitch - 2) / 2;
-  const lag = moving ? 0.22 : 0;
-  const nc = Math.max(2, Math.round(hb / 9)), chh = hb / nc;
-  return (
-    <g>
-      <g transform={`translate(${x},${y})`}>
-        <rect
-          x={-20} y={-22} width={40} height={44 + hb - 18} rx={7} fill={`${c}${retNow ? "44" : "22"}`} stroke={moving ? T.ink : c}
-          strokeWidth={moving ? 2.6 : home && qNow === 0 && cnt[s][t].length ? 1.8 : 1.4} opacity={sel === s || sel == null ? 1 : 0.45}
-        />
-        <text y={-9} textAnchor="middle" fontFamily={mono} fontSize="9.5" fontWeight="700" fill={T.ink}>
-          {detail ? `${n}/${B}` : retNow ? `y ${tag}${t}` : qNow >= 1 ? `G${s}` : `→${tag}${t}`}
-        </text>
-      </g>
-      {Array.from({ length: B }, (_, k) => {
-        const i = Math.floor(k / C), j = k % C;
-        const on = j < Math.min(cnt[s][t][i], C);
-        const id = on && sel === s && hb <= 18.5 ? cfg.items[s][t][i][j] : null;
-        const ek = ease(clamp01((p - (lag * k) / Math.max(1, B - 1)) / (1 - lag)));
-        const [bx, by] = route(s, t, lerp(qb, qa, ek));
-        const px = bx + x0 + k * pitch, py = by - 1;
-        return (
-          <g key={k} transform={`translate(${px},${py})`} opacity={sel === s || sel == null ? 1 : 0.45}>
-            {on ? (
-              Array.from({ length: nc }, (_, ci) => {
-                const zero = act > 0 && (ci * 7 + s * 3 + t * 5 + k * 2) % 3 === 0;
-                return <rect key={ci} x={0} y={ci * chh} width={pitch - 2} height={chh - (nc > 2 ? 0.6 : 0)} rx={2} fill={c} fillOpacity={SHADE[i] * (zero ? lerp(1, 0.12, act) : 1)} stroke={c} strokeOpacity={SHADE[i]} />;
-              })
-            ) : (
-              <rect x={0} y={0} width={pitch - 2} height={hb} rx={2} fill="transparent" stroke={c} strokeOpacity={SHADE[i]} strokeDasharray="2 2" />
-            )}
-            {id != null && <text x={(pitch - 2) / 2} y={13} textAnchor="middle" fontFamily={mono} fontSize="8.5" fontWeight="800" fill={T.bg}>{id}</text>}
-          </g>
-        );
-      })}
-    </g>
-  );
-}
-
-
-// the Ed experts on device d, each with its two weight matrices drawn as in the
-// Dense → MoE tab: W_up widens M → H, W_down narrows H → M
-const pairGeo = (d, i, Ed) => {
-  const pw = (DW - 20) / Ed, gap = Ed === 1 ? 14 : 10;
-  const mw = (pw - gap) / 2;
-  const x0 = DX(d) + 10 + i * pw;
-  return { x0, upX: x0, dnX: x0 + mw + gap, mw, cx: x0 + pw / 2 };
-};
-function Experts({ d, ffn, Ed }) {
-  const c = EC[d];
-  const lo = Ed === 1 ? 14 : 12, hi = Ed === 1 ? 44 : 40;
-  const poly = (x0, w, l, r) => `${x0},${MY - l / 2} ${x0 + w},${MY - r / 2} ${x0 + w},${MY + r / 2} ${x0},${MY + l / 2}`;
-  const lit = (k) => ffn === k;
-  return (
-    <g>
-      {Array.from({ length: Ed }, (_, i) => {
-        const g = pairGeo(d, i, Ed);
-        const op = SHADE[i];
-        const big = g.mw >= 30;
-        return (
-          <g key={i}>
-            <polygon points={poly(g.upX, g.mw, lo, hi)} fill={c} fillOpacity={(lit("up") ? 0.42 : 0.13) * op + 0.05} stroke={lit("up") ? T.ink : c} strokeWidth={lit("up") ? 2.4 : 1.3} style={{ transition: "all .3s" }} />
-            <polygon points={poly(g.dnX, g.mw, hi, lo)} fill={c} fillOpacity={(lit("dn") ? 0.42 : 0.13) * op + 0.05} stroke={lit("dn") ? T.ink : c} strokeWidth={lit("dn") ? 2.4 : 1.3} style={{ transition: "all .3s" }} />
-            {big && <text x={g.upX + g.mw / 2} y={MY + 4} textAnchor="middle" fontFamily={mono} fontSize={Ed === 1 ? 9.5 : 8.5} fontWeight="700" fill={T.ink}>W_up</text>}
-            {big && <text x={g.dnX + g.mw / 2} y={MY + 4} textAnchor="middle" fontFamily={mono} fontSize={Ed === 1 ? 9.5 : 8.5} fontWeight="700" fill={T.ink}>W_down</text>}
-            {Ed === 1 && <text x={g.upX + g.mw / 2} y={MY - 30} textAnchor="middle" fontFamily={mono} fontSize="9" fill={T.dim}>M→H</text>}
-            {Ed === 1 && <text x={g.dnX + g.mw / 2} y={MY - 30} textAnchor="middle" fontFamily={mono} fontSize="9" fill={T.dim}>H→M</text>}
-            <text x={g.cx} y={MY + 40} textAnchor="middle" fontFamily={mono} fontSize={Ed === 1 ? 10.5 : 9.5} fontWeight="700" fill={c} fillOpacity={0.4 + 0.6 * op}>{Ed === 1 ? `Expert ${d}` : `E${d * Ed + i}`}</text>
-          </g>
-        );
-      })}
-    </g>
-  );
-}
-
-// combine: the followed group's first tokens. Each token's two expert outputs
-// shrink by their gate weights (g·y), then slide together and stack into one bar.
-function Combine({ cfg, sel, e }) {
-  const { Ed, groups } = cfg;
-  const toks = groups[sel].toks.slice(0, 3);
-  const u1 = ease(clamp01(e / 0.5)), u2 = ease(clamp01((e - 0.5) / 0.5));
-  const Yb = CY2 + 34, HM = 36;
-  const x0 = DX(sel);
-  return (
-    <g opacity={ease(clamp01(e * 5))}>
-      <rect x={x0 + 6} y={CY2 - 34} width={DW - 12} height={88} rx={8} fill={T.panel} stroke={T.rule} />
-      {toks.map((tk, ti) => {
-        const cx = x0 + 36 + ti * 60;
-        const chs = [tk.t1, tk.t2].filter((ch) => ch.ok);
-        const hs = chs.map((ch) => HM * lerp(1, ch.w, u1));
-        const sum = hs.reduce((a, b) => a + b, 0);
-        return (
-          <g key={tk.s}>
-            {chs.map((ch, ci) => {
-              const h = hs[ci];
-              const bx = lerp(cx + (ci === 0 ? -10 : 10), cx, u2) - 6;
-              const yBot = ci === 0 ? lerp(Yb, Yb - (sum - h), u2) : Yb;
-              const col = EC[Math.floor(ch.e / Ed)];
-              return (
-                <g key={ci}>
-                  <rect x={bx} y={yBot - h} width={12} height={h} rx={2} fill={col} fillOpacity={0.85} stroke={T.ink} strokeOpacity={0.5} />
-                  <text x={bx + 6} y={Yb - HM - 5} textAnchor="middle" fontFamily={mono} fontSize="8.5" fill={T.soft} opacity={1 - u2}>×{lerp(1, ch.w, u1).toFixed(2)}</text>
-                </g>
-              );
-            })}
-            <text x={cx} y={Yb + 12} textAnchor="middle" fontFamily={mono} fontSize="9" fill={T.accent} opacity={u2}>out t{tk.s}</text>
-          </g>
-        );
-      })}
-    </g>
-  );
-}
-
-function Scene({ step, sel, cfg }) {
-  const p = useProgress(step.id); // 0 → 1 each time a new picture arrives
-  const e = ease(p);
-  const { round, fan, detail, phase, ffn, back } = step;
-  const sid = step.sid;
-  const { Ed, tag } = cfg;
-  const done = round >= D - 1 && phase !== "send";
-  const landed = phase === "send" ? round - 1 : round;
-
-  // position of the bundle with ring distance r on its route, before / after this line
-  const uPair = (r) => {
-    if (sid === "keep") return r === 0 ? [0, 1] : [0, 0];
-    if (phase === "send" && r === round) return [0, 0.5]; // leaves the device, rides the wire
-    if (phase === "recv" && r === round) return [0.5, 1]; // lands in the receive buffer
-    const v = r <= landed ? 1 : 0;
-    return [v, v];
-  };
-  const wPair = (r) => (back == null ? [0, 0] : sid === "combine" ? [1, 1] : [r < back ? 1 : 0, r <= back ? 1 : 0]);
-  const qPair = (r) => {
-    if (back == null) return uPair(r);
-    const w = wPair(r);
-    return [1 - w[0], 1 - w[1]]; // the return trip is the same route run backwards
-  };
-
-  let hb = 18, act = 0;
-  if (sid === "ffn_up") { hb = lerp(18, 44, ease(clamp01(p / 0.55))); act = clamp01((p - 0.55) / 0.45); }
-  else if (sid === "ffn_dn") { hb = lerp(44, 18, ease(clamp01((p - 0.45) / 0.55))); act = 1 - clamp01(p / 0.45); }
-
-  const arcs = [];
-  if (fan) for (let t = 0; t < D; t++) if (t !== sel) arcs.push([sel, t]);
-  if (phase) for (let s = 0; s < D; s++) arcs.push([s, mod(s + round, D)]);
-  if (back > 0 && sid !== "combine") for (let s = 0; s < D; s++) arcs.push([mod(s + back, D), s]);
-  const bundles = [];
-  let total = 0;
-  for (let s = 0; s < D; s++) for (let t = 0; t < D; t++) {
-    const r = mod(t - s, D);
-    const [qb, qa] = qPair(r);
-    const w = wPair(r);
-    const retNow = back != null && (w[0] === 1 || (w[1] === 1 && e >= 0.5));
-    total += back == null ? lerp(qb, qa, e) : 1 - lerp(qb, qa, e);
-    bundles.push(<Bundle key={`${s}-${t}`} cfg={cfg} s={s} t={t} qb={qb} qa={qa} p={p} e={e} sel={sel} detail={detail} retNow={retNow} hb={hb} act={act} />);
-  }
-  const fanOn = (s, t) => fan && s === sel && t !== s;
-  const flashP = hump((p - 0.55) / 0.45);
-  const slotGlow = (d, j, recv) => {
-    if (recv) {
-      if (sid === "keep") return d === j ? flashP : 0;
-      return phase === "recv" && mod(d - j, D) === round ? flashP : 0;
-    }
-    return back != null && sid !== "combine" && mod(j - d, D) === back ? flashP : 0;
-  };
-  const ffnLabel = ffn === "up" ? (p < 0.55 ? "x → W_up x : M → H" : "act( · ) : negatives → 0") : ffn === "dn" ? "h → W_down h : H → M" : null;
-  const t0 = groupsFirst(cfg, sel);
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
-      <defs>
-        <marker id="a2a-arrow" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-          <path d="M0,0 L10,5 L0,10 z" fill={T.wire} />
-        </marker>
-      </defs>
-
-      {Array.from({ length: D }, (_, d) => (
-        <g key={d}>
-          <rect x={DX(d)} y={BY} width={DW} height={BH} rx={10} fill={T.panel} stroke={d === sel ? T.accent : T.rule} strokeWidth={d === sel ? 1.8 : 1.2} />
-          <text x={DX(d) + 12} y={BY + 22} fontFamily={mono} fontSize="12.5" fontWeight="700" fill={T.ink}>Device {d}{d === sel ? " · following" : ""}</text>
-          <Experts d={d} ffn={ffn} Ed={Ed} />
-          {[[CY1, back != null ? `home: results y from ${tag}_j` : `send: tokens for ${tag}_j`], [CY2, ffnLabel ?? "recv: tokens from G_j"]].map(([cy, label]) => (
-            <g key={cy}>
-              <text x={DX(d) + 10} y={cy - 32} fontFamily={mono} fontSize="9.5" fill={(cy === CY2 && done) || (cy === CY2 && ffn) ? T.accent : T.dim}>{label}</text>
-              {Array.from({ length: D }, (_, j) => {
-                const g = slotGlow(d, j, cy === CY2);
-                return (
-                  <rect
-                    key={j} x={DX(d) + 10 + j * 44} y={cy - 24} width={40} height={48} rx={7} fill={g > 0 ? T.accent : "none"} fillOpacity={0.22 * g}
-                    stroke={g > 0 ? T.accent : T.rule} strokeWidth={1 + 2 * g} strokeDasharray={g > 0.2 ? "none" : "3 3"}
-                  />
-                );
-              })}
-            </g>
-          ))}
-        </g>
-      ))}
-
-      {sid === "combine" && <Combine cfg={cfg} sel={sel} e={e} />}
-
-      {arcs.map(([s, t], i) => {
-        const x0 = DX(s) + DW / 2, x1 = DX(t) + DW / 2;
-        const h = arcH(s, t);
-        const grow = fan ? clamp01(e * 1.4) : 1;
-        return (
-          <path
-            key={i} d={`M${x0},${BY - 4} Q${(x0 + x1) / 2},${BY - 4 - h * 1.6} ${x1},${BY - 4}`} fill="none" stroke={T.wire} strokeWidth={2}
-            opacity={0.8 * (fan ? clamp01(e * 3) : 1)} className={fan ? undefined : "lane"} markerEnd="url(#a2a-arrow)"
-            pathLength={1} strokeDasharray={fan ? `${grow} 1` : undefined}
-          />
-        );
-      })}
-      {fan && arcs.map(([s, t], i) => {
-        const x0 = DX(s) + DW / 2, x1 = DX(t) + DW / 2;
-        const h = arcH(s, t);
-        const a = (1 - e) * (1 - e), b = 2 * e * (1 - e), c2 = e * e;
-        return <circle key={`dot${i}`} cx={a * x0 + b * (x0 + x1) / 2 + c2 * x1} cy={a * (BY - 4) + b * (BY - 4 - h * 1.6) + c2 * (BY - 4)} r={4} fill={T.ink} opacity={0.9 * (1 - clamp01((e - 0.9) / 0.1))} />;
-      })}
-
-      {ffn && Array.from({ length: D }, (_, d) => Array.from({ length: Ed }, (_, i) => {
-        const g = pairGeo(d, i, Ed);
-        const ux = g.upX + g.mw / 2;
-        const up = ffn === "up";
-        return (
-          <g key={`${d}-${i}`}>
-            <path
-              className="lane" fill="none" stroke={T.wire} strokeWidth={2} opacity={0.85} markerEnd="url(#a2a-arrow)"
-              d={up ? `M${ux},${CY2 + 28} L${ux},${MY - 28}` : `M${g.upX + g.mw + 1},${MY} L${g.dnX - 1},${MY}`}
-            />
-            <circle cx={up ? ux : lerp(g.upX + g.mw + 1, g.dnX - 1, e)} cy={up ? lerp(CY2 + 28, MY - 28, e) : MY} r={3.5} fill={T.ink} opacity={0.9} />
-          </g>
-        );
-      }))}
-
-      {bundles}
-
-      <text x={20} y={46} fontFamily={mono} fontSize="12" fontWeight="700" fill={T.accent}>
-        {sid === "combine" && t0
-          ? `out[t${t0.s}] = ${[t0.t1, t0.t2].filter((c) => c.ok).map((c) => `${lerp(1, c.w, e).toFixed(2)}·y(E${c.e})`).join(" + ")}`
-          : ffn
-            ? null
-            : back != null
-              ? `home ${Math.round(total)} / ${D * D} bundles`
-              : `delivered ${Math.round(total)} / ${D * D} bundles`}
-      </text>
-
-      {ffn && (
-        <text x={W / 2} y={H - 6} textAnchor="middle" fontFamily={mono} fontSize="11" fill={T.wire}>
-          {Ed === 1 ? "device d holds only expert d's weights, so the tokens had to come to it" : "each device holds only its own experts' weights, so the tokens had to come to them"}
-        </text>
-      )}
-      {back != null && (
-        <text x={W / 2} y={H - 6} textAnchor="middle" fontFamily={mono} fontSize="11" fill={T.wire}>
-          {sid === "combine" ? "gate weights g1, g2 scale each expert's y before the sum" : "same pattern as dispatch, direction reversed: results come home to the group that owns the token"}
-        </text>
-      )}
-      {phase && (
-        <text x={W / 2} y={H - 6} textAnchor="middle" fontFamily={mono} fontSize="11" fill={T.wire}>
-          each device sends 1 token bundle and receives 1 — no link is shared
-        </text>
-      )}
-    </svg>
-  );
-}
-const groupsFirst = (cfg, sel) => cfg.groups[sel].toks[0];
-
-
-// Where is each token of the followed group right now? One row per token, one
-// cell per expert it was routed to (top-1 / top-2), each with its gate weight.
+const devOf = (cfg, e) => Math.floor(e / cfg.Ed);
+// ids of the tokens of group s that have at least one surviving expert on device t
+const why = (ch, second) => (!ch.capOk && second ? "capacity" : second && !ch.diceOk ? "dice" : "capacity");
+// ---- the router's table for the followed device, with where each choice is now ------
 function Inspector({ cfg, step, sel }) {
-  const { Ed, C, groups } = cfg;
+  const { Ed, groups } = cfg;
   const g = groups[sel];
+  const pid = step.id;
   const landed = step.phase === "send" ? step.round - 1 : step.round;
   const where = (ch) => {
-    const dev = Math.floor(ch.e / Ed);
+    const dev = devOf(cfg, ch.e);
     const r = mod(dev - sel, D);
-    if (step.back != null && r <= step.back) return ["result is home", T.accent];
+    if (step.back != null && r <= step.back) return ["result home", T.accent];
     if (r <= landed) {
-      if (step.ffn) return [step.ffn === "up" ? `E${ch.e} · W_up` : `E${ch.e} · W_down`, T.ink];
-      if (step.back != null || ["ffn_up", "ffn_dn"].includes(step.sid)) return [`y waits on D${dev}`, T.soft];
+      if (step.ffn) return [step.ffn === "up" ? "in W_up" : "in W_down", T.ink];
+      if (step.back != null || pid === "ffn_up" || pid === "ffn_dn") return [`y waits on D${dev}`, T.soft];
       return [`arrived at D${dev}`, T.soft];
     }
-    return [dev === sel ? "stays on this device" : `still on D${sel}, bound for D${dev}`, T.dim];
+    return [dev === sel ? "stays" : `→ D${dev}`, T.dim];
   };
-  const cell = (ch, why) => {
-    if (!ch.ok) return <span style={{ color: T.bad }}>dropped · {why}</span>;
-    const dev = Math.floor(ch.e / Ed);
+  const cell = (ch, second) => {
+    if (!ch.ok) return <span style={{ color: T.bad }}>dropped · {why(ch, second)}</span>;
+    const dev = devOf(cfg, ch.e);
     const [txt, col] = where(ch);
     return (
       <span>
-        <b style={{ color: EC[dev] }}>E{ch.e}</b> <span style={{ color: T.dim }}>on D{dev}</span> · <b>g = {ch.w.toFixed(2)}</b>
-        <div style={{ color: col, fontSize: 10.5 }}>{txt}</div>
+        <b style={{ color: EC[dev] }}>E{ch.e}</b> <span style={{ color: T.dim }}>D{dev}</span> · g {f2(ch.w)} <span style={{ color: col }}>· {txt}</span>
       </span>
     );
   };
-  const combined = step.sid === "combine";
-  const ce = ease(useProgress(step.id));
+  const combined = pid === "combine";
   return (
     <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: "12px 16px", display: "grid", gap: 8 }}>
-      <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.12em", color: T.dim }}>TOKENS OF DEVICE {sel} (GROUP G{sel}) · digit in a bar = token id</div>
-      <div style={{ fontSize: 11.5, color: T.dim, lineHeight: 1.5 }}>
-        The router gave every token two experts. <b style={{ color: T.soft }}>g</b> is that expert's gate weight (the two add up to 1). A bar carries the token's vector to the expert, so a token with two experts appears in two bars.
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 1fr", gap: "6px 12px", fontFamily: mono, fontSize: 11.5, alignItems: "start" }}>
+      <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.12em", color: T.dim }}>ROUTER DECISIONS · TOKENS OF DEVICE {sel} · g = gate weight</div>
+      <div style={{ display: "grid", gridTemplateColumns: "36px 1fr 1fr", gap: "6px 12px", fontFamily: mono, fontSize: 11.5, alignItems: "start" }}>
         <span style={{ color: T.dim }}>token</span><span style={{ color: T.dim }}>1st choice</span><span style={{ color: T.dim }}>2nd choice</span>
         {g.toks.map((t) => (
           <div key={t.s} style={{ display: "contents" }}>
             <b style={{ color: T.ink }}>t{t.s}</b>
-            {cell(t.t1, "over capacity")}
-            {cell(t.t2, t.t2.capOk ? "random routing" : "over capacity")}
+            {cell(t.t1, false)}
+            {cell(t.t2, true)}
             {combined && (
-              <div style={{ gridColumn: "1 / -1", color: T.accent, fontSize: 11, margin: "-2px 0 2px 56px" }}>
-                out[t{t.s}] = {t.t1.ok ? `${lerp(1, t.t1.w, ce).toFixed(2)}·y(E${t.t1.e})` : ""}{t.t1.ok && t.t2.ok ? " + " : ""}{t.t2.ok ? `${lerp(1, t.t2.w, ce).toFixed(2)}·y(E${t.t2.e})` : ""}
+              <div style={{ gridColumn: "1 / -1", color: T.accent, fontSize: 11, margin: "-2px 0 2px 48px" }}>
+                out[t{t.s}] = {t.final.length ? t.final.map((f) => `${f2(f.w)}·y(E${f.e})`).join(" + ") : "0 (dropped)"}
               </div>
             )}
           </div>
@@ -497,7 +195,7 @@ export default function A2AView() {
   return (
     <Stepper
       title="All-to-all collective"
-      subtitle={`D=${D} devices · ${Ed} expert${Ed > 1 ? "s" : ""} per device (E=${cfg.E}) · every device sends its tokens for each device's experts to that device`}
+      subtitle={`D=${D} devices · ${Ed} expert${Ed > 1 ? "s" : ""} per device (E=${cfg.E}) · the router decides which tokens each device sends where`}
       blocks={cfg.BLOCKS}
       steps={cfg.STEPS}
       header={(step) => (
@@ -508,7 +206,7 @@ export default function A2AView() {
               <button key={v} onClick={() => setEd(v)} style={{ ...btn(v === Ed, false), height: 28, padding: "0 10px" }}>{v}</button>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 4, alignItems: "center" }} title="the bundles that device 's' started with stay bright in every step, including the return trip">
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
             <span style={{ fontSize: 10.5, color: T.dim, marginRight: 4 }}>follow device</span>
             {Array.from({ length: D }, (_, k) => (
               <button key={k} onClick={() => setSel(k)} style={{ ...btn(k === sel, false), height: 28, padding: "0 10px" }}>{k}</button>
@@ -516,13 +214,9 @@ export default function A2AView() {
           </div>
         </div>
       )}
-      scene={(step) => <MoEBlockMap step={step} Ed={Ed} E={cfg.E} sel={sel} />}
+      scene={(step) => <MoEBlockMap step={step} Ed={Ed} E={cfg.E} sel={sel} cfg={cfg} />}
       extra={(step) => (
         <div style={{ display: "grid", gap: 12 }}>
-          <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: 12 }}>
-            <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.12em", color: T.dim, marginBottom: 8 }}>DEVICE-LEVEL DETAIL · THE PAIRWISE SEND/RECV MECHANICS</div>
-            <Scene step={step} sel={sel} cfg={cfg} />
-          </div>
           <Inspector cfg={cfg} step={step} sel={sel} />
         </div>
       )}
@@ -530,8 +224,8 @@ export default function A2AView() {
       shapes={(step) => cfg.SHAPES[step.sid]}
       legend={
         <>
-          <span>bright = bundles that started on the followed device · bar = one token's vector (a vector of M numbers, not a probability) · dashed = padding{Ed > 1 ? " · one shade per local expert" : ""} · box <b style={{ color: T.soft }}>→{cfg.tag} t</b> = tokens for {Ed === 1 ? "expert" : "the experts on device"} t</span>
-          {EC.map((c, e) => <span key={e} style={{ color: c }}>■ for device {e}</span>)}
+          <span>bright = followed device · digit in a slot = token id · dashed red = dropped (capacity or random routing){Ed > 1 ? " · one shade per local expert" : ""}</span>
+          {EC.map((c, e) => <span key={e} style={{ color: c }}>■ device {e}</span>)}
         </>
       }
     />
