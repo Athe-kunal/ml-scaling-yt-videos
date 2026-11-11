@@ -161,15 +161,21 @@ function Scene({ step, tok, ex, setEx }) {
         {Array.from({ length: rows }, (_, i) => (
           <g key={i} opacity={i === tok ? 1 : 0.7}>
             <text x={x0 - 6} y={y0 + i * ch + ch / 2 + 3} textAnchor="end" fontFamily={mono} fontSize="11" fill={i === tok ? T.ink : T.dim}>x{i}</text>
-            {QB0.margins[i].map((v, j) => (
-              <rect key={j} x={x0 + j * cw} y={y0 + i * ch} width={cw - 3} height={ch - 3} rx={3} fill={div(shift(i, j))} stroke={i === tok ? T.ink : "none"} />
-            ))}
+            {QB0.margins[i].map((v, j) => {
+              const val = shift(i, j); // animates from s_ij to s_ij − α_i
+              return (
+                <g key={j}>
+                  <rect x={x0 + j * cw} y={y0 + i * ch} width={cw - 3} height={ch - 3} rx={3} fill={div(val)} stroke={i === tok ? T.ink : "none"} />
+                  <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + i * ch + ch / 2 + 3} textAnchor="middle" fontFamily={mono} fontSize="11" fontWeight={i === tok ? 700 : 400} fill={T.ink}>{Math.abs(val) < 1e-9 ? "0" : Math.abs(val) < 0.01 ? val.toFixed(3) : (val > 0 ? "+" : "") + val.toFixed(2)}</text>
+                </g>
+              );
+            })}
           </g>
         ))}
         <text x={x0} y={y0 + rows * ch + 20} fontFamily={mono} fontSize="10" fill={T.dim}>warm = above the cutoff · cool = below</text>
         <Bars x={470} y={90} w={370} h={200} values={tokVals} max={Math.max(...B0[tok]) * 1.12} min={Math.min(...QB0.margins[tok])} ideal={alpha * (1 - e)} idealLabel="α" fmt={f2} title={`TOKEN x${tok} · MARGIN s − α`} labels={XC.map((_, j) => `E${j}`)} />
-        <Tex x={470} y={318} w={390} h={30} size={12.5} color={T.ink} tex={order(B0[tok]).slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(B0[tok][j])}-${d2(alpha * e)}=${c(d2(B0[tok][j] - alpha * e), j)}`).join("\\;\\;")} />
-        <text x={470} y={366} fontFamily={mono} fontSize="11" fill={T.dim}>routed experts &gt; 0 · the (k+1)-th is exactly 0</text>
+        <Tex x={470} y={314} w={390} h={66} size={12.5} color={T.ink} tex={`\\begin{gathered}${order(B0[tok]).slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(B0[tok][j])}-${d2(alpha * e)}=${c(d2(B0[tok][j] - alpha * e), j)}`).join("\\\\")}\\end{gathered}`} />
+        <text x={470} y={400} fontFamily={mono} fontSize="11" fill={T.dim}>routed experts &gt; 0 · the (k+1)-th is exactly 0</text>
       </g>
     );
   } else if (step.scene === "quantile") {
