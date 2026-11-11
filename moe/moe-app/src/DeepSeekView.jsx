@@ -62,7 +62,7 @@ const STEPS = [
   { id: "update", block: "update", lines: [1], scene: "update", stage: 1, caption: "overloaded: b − γ · underloaded: b + γ", vars: () => [["γ", `${GAMMA}`], ["paper γ", "0.001"]] },
   { id: "select", block: "bias", lines: [0, 1], visAt: 0, scene: "bias", t: 1, prev: 0, caption: `use the b from step 1 on the 8-token toy: only ${repicked(SIM[1].b)} of ${TT} tokens change their picks`, vars: () => [["bias after", "1 step"], ["select", "s + b"], ["weight", "s"]] },
   ...LOOPT.map(loopStep),
-  { id: "select10", block: "bias", lines: [0, 1], visAt: 0, scene: "bias", t: 10, prev: 1, caption: `the b after 10 training steps on the same 8 tokens: ${repicked(SIM[10].b)} of ${TT} tokens now pick differently`, vars: () => [["bias after", "20 steps"], ["select", "s + b"], ["weight", "s"]] },
+  { id: "select10", block: "bias", lines: [0, 1], visAt: 0, scene: "bias", t: 10, prev: 1, caption: `the b after 10 training steps on the same 8 tokens: ${repicked(SIM[10].b)} of ${TT} tokens now pick differently`, vars: () => [["bias after", "10 steps"], ["select", "s + b"], ["weight", "s"]] },
   { id: "recipe", block: "recipe", lines: [0, 1], visAt: 0, scene: "recipe", caption: "bias balances batches, tiny loss guards each sequence", vars: () => [["tokens dropped", "0"]] },
 ];
 

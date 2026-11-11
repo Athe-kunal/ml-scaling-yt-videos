@@ -3,7 +3,12 @@ import { T, mono, sans, btn } from "./theme";
 import { CodeLine } from "./shapes";
 import { DsScene, DS_STEPS, DS_BLOCKS } from "./DeepSeekView";
 import { KimiScene, KIMI_STEPS, KIMI_BLOCKS } from "./KimiView";
-import { LB } from "./lbModel";
+import { LB, simulate } from "./lbModel";
+
+// same runs the two tabs draw (γ = 0.02 on this toy). Row u = the state after u bias updates.
+const SG = simulate("sign", 60, 0.02);
+const QBR = simulate("qb", 60);
+const cv = (R, u) => R[u].cv.toFixed(2);
 
 // DeepSeek-V3 and Kimi K3 load balancing, side by side. Every pair below puts a
 // DeepSeek step next to the Kimi step that does the same job, so one prev / next
@@ -14,14 +19,17 @@ const PAIRS = [
   { part: "pick experts", ds: "topk", ki: "topk1", say: "Both start the same way: every token keeps its top-k experts. They differ in what they do about imbalance." },
   { part: "measure", ds: "monitor", ki: "margin", say: "DeepSeek counts tokens per expert. Kimi measures how far each score sits above its token's cutoff." },
   { part: "target", ds: "err", ki: "q", say: "DeepSeek asks only: over or under the mean? Kimi asks: what threshold leaves exactly k/N of the tokens above it?" },
-  { part: "update b", ds: "update", ki: "quantile", say: "DeepSeek moves b by a fixed ±γ. Kimi sets b straight to the quantile, so the size of the imbalance counts." },
+  { part: "update b", ds: "update", ki: "quantile", say: "DeepSeek moves b by a fixed ±γ: a sign step on the load error. Kimi sets b straight to the quantile, the exact answer to the same objective, so there is no step size to tune." },
   { part: "update b", ds: null, dsNote: "no equivalent step: each bias just moves by ±γ", ki: "center", say: "Kimi removes the mean of b. That changes no ranking, it only keeps the biases small." },
   { part: "at scale", ds: null, dsNote: "only the token count per expert is needed: N numbers, one small all-reduce", ki: "hist", say: "Across GPUs Kimi cannot sort all margins, so every rank bins its own." },
   { part: "at scale", ds: null, dsNote: "only the token count per expert is needed: N numbers, one small all-reduce", ki: "reduce", say: "The ranks add their bin counts: N × L numbers, whatever the number of tokens." },
   { part: "at scale", ds: null, dsNote: "only the token count per expert is needed: N numbers, one small all-reduce", ki: "bhat", say: "The quantile is read off the pooled histogram. This is the price of Kimi's method: a histogram all-reduce." },
   { part: "apply", ds: "select", ki: "apply", say: "Both apply the bias to the NEXT batch. It only decides who is picked; the gate still uses the raw score." },
-  { part: "race", ds: "t1", ki: "t2", say: "After the first updates: Kimi has already moved most of the way, the sign rule has barely started." },
-  { part: "race", ds: "t10", ki: "t10", say: "Around 10 steps in. In both cases the bias is frozen at inference." },
+  // DeepSeek loop step t shows the load under t-1 updates; Kimi's t shows the state after t updates.
+  // So Kimi t2 pairs with DeepSeek t3 (2 updates each) and Kimi t5 with DeepSeek t6 (5 each).
+  { part: "race", ds: "t3", ki: "t2", say: `After 2 updates, same toy, same batches: load CV ${cv(SG, 2)} for the sign step, ${cv(QBR, 2)} for the quantile. Kimi is almost there.` },
+  { part: "race", ds: "t6", ki: "t5", say: `After 5 updates: CV ${cv(SG, 5)} for the sign step, ${cv(QBR, 5)} for the quantile. The sign step is still closing the gap.` },
+  { part: "race", ds: "select10", ki: "t10", say: `After 10 updates the sign step has caught up on this toy (CV ${cv(SG, 10)} vs ${cv(QBR, 10)}): 4 experts and a large γ = 0.02. DeepSeek's real γ is 0.001 and K3 has 896 experts, where a fixed step is far slower. Both biases are frozen at inference.` },
   { part: "loss", ds: "f", ki: null, kiNote: "no balance-loss term in this walkthrough: Kimi balances with the bias alone", say: "DeepSeek also keeps a tiny balance loss as a safety net. First f: how much of its fair share each expert got." },
   { part: "loss", ds: "P", ki: null, kiNote: "no balance-loss term in this walkthrough: Kimi balances with the bias alone", say: "P: how much the router likes each expert. Smooth, so it carries the gradient." },
   { part: "loss", ds: "L", ki: null, kiNote: "no balance-loss term in this walkthrough: Kimi balances with the bias alone", say: "L = α Σ f·P. It stays tiny: the bias does the real balancing." },
