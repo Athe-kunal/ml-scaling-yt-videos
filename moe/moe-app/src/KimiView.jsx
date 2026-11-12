@@ -6,6 +6,7 @@ import Stepper from "./Stepper";
 import { Tex } from "./tex";
 import { KIMI_GLOSSARY, KIMI_SHAPES } from "./lbShapes";
 import { useProgress, ease, lerp, clamp01 } from "./anim";
+import K3Panel, { K3_STEPS } from "./KimiK3Panel";
 
 // Kimi K3 Quantile Balancing (arXiv 2607.24653, §2.3.3). Instead of nudging b_j by a
 // fixed ±γ, set it so expert j is chosen by exactly k/n of the batch:
@@ -36,8 +37,12 @@ const BLOCKS = [
   { id: "limit", label: "why not ± γ?", sub: "fixed step: slow or jittery", code: [
     "b += gamma * sign(load.mean() - load)   # load [N] → mean over N → scalar; b [N] · gamma = fixed step size",
     "# small gamma: slow   large gamma: oscillates"] },
+  { id: "scores", label: "affinity scores", sub: "logit → sigmoid → s + b", code: [
+    "z = x @ W   # x [B,D] @ W [D,N] → [B,N] · z[t,i] = how strongly token t wants expert i (logit)",
+    "s = sigmoid(z)   # [B,N] → [B,N] · each score squashed into (0,1); no softmax across experts",
+    "biased = s + b   # [B,N] + [N] → [B,N] · b = 0 on the very first batch"] },
   { id: "cutoff", label: "top-(k+1) cutoff", sub: "α_i per token", code: [
-    "vals = topk(s + b, k + 1)   # s [B,N] + b [N] → [B,N] → top k+1 over N → [B,k+1] · B tokens, N experts, b[i] = bias of expert i",
+    "vals = topk(biased, k + 1)   # biased [B,N] → top k+1 over N → [B,k+1] · B tokens, N experts, b[i] = bias of expert i",
     "alpha = vals[:, k]   # [B,k+1] → [B] · alpha[t] = token t's (k+1)-th best score = its cutoff"] },
   { id: "margin", label: "routing margin", sub: "s_ij − α_i", code: [
     "margin = s - alpha[:, None]   # [B,N] − [B,1] → [B,N] · margin[t,i] = how far expert i is above token t's cutoff"] },
@@ -46,6 +51,9 @@ const BLOCKS = [
     "b_hat = -quantile(margin, q, dim=0)   # [B,N] → quantile over B → [N] · b_hat[i] = bias that gives expert i k/N of the tokens"] },
   { id: "center", label: "mean-centre", sub: "selection unchanged", code: [
     "b = b_hat - b_hat.mean()   # [N] − (mean over N → scalar) → [N] · same shift for every expert, so rankings do not change"] },
+  { id: "onegpu", label: "one GPU: exact sort", sub: "what we assumed so far", code: [
+    "# so far everything sat on ONE GPU: all B tokens' margins in one place",
+    "b_hat = -torch.quantile(margin, q, dim=0)   # [B,N] sort over B → [N] · exact, but needs the whole [B,N] in memory"] },
   { id: "allreduce", label: "histogram + all-reduce", sub: "scales to ~1000 experts", code: [
     "hist = histogram(margin, bins)   # [B,N] → count over B per bin → [N,L] on each rank · L bins, each rank holds B/R tokens",
     "all_reduce(hist)   # sum over R ranks → [N,L], identical on every rank",
@@ -61,19 +69,23 @@ const BLOCKS = [
 ];
 
 const STEPS = [
-  { id: "limit", block: "limit", lines: [0], scene: "limit", caption: "fixed γ: slow when small, jittery when large", vars: () => [["n experts (K3)", "896"], ["k", "16"]] },
-  { id: "topk1", block: "cutoff", lines: [0], scene: "cutoff", stage: 0, pick: "tok", caption: "take each token's k+1 best experts", vars: () => [["k", `${k}`], ["keep", `k+1 = ${k + 1}`]] },
-  { id: "cutoff", block: "cutoff", lines: [1], scene: "cutoff", stage: 1, pick: "tok", caption: "its (k+1)-th best score is the cutoff α", vars: () => [["k", `${k}`], ["α", "(k+1)-th"]] },
-  { id: "margin", block: "margin", lines: [0], scene: "margin", pick: "tok", caption: "margin = how far each expert is above that cutoff", vars: () => [["margin", "s_ij − α_i"]] },
-  { id: "q", block: "quantile", lines: [0], scene: "quantile", stage: 0, pick: "ex", caption: "we want k/n of the tokens to clear the cutoff", vars: () => [["target", `k/n = ${(k / n).toFixed(2)}`], ["quantile", `${(1 - k / n).toFixed(2)}`], ["K3", "1 − 16/896 ≈ 0.982"]] },
-  { id: "quantile", block: "quantile", lines: [1], scene: "quantile", stage: 1, pick: "ex", caption: "slide b until exactly k/n of tokens pass the cutoff", vars: () => [["target", `k/n = ${(k / n).toFixed(2)}`], ["quantile", `${(1 - k / n).toFixed(2)}`]] },
-  { id: "center", block: "center", lines: [0], scene: "center", pick: "ex", caption: "subtract the mean: routing unchanged, bias stays small", vars: () => [["mean b̂", Math.abs(QB0.bhat.reduce((a, x) => a + x, 0) / n) < 1e-9 ? "0" : (QB0.bhat.reduce((a, x) => a + x, 0) / n).toFixed(3)]] },
-  { id: "hist", block: "allreduce", lines: [0], scene: "allreduce", stage: 0, pick: "ex", caption: "each rank bins its own margins", vars: () => [["ranks", `${ranks}`], ["bins / expert", `${NB} here · few hundred in K3`]] },
-  { id: "reduce", block: "allreduce", lines: [1], scene: "allreduce", stage: 1, pick: "ex", caption: "all-reduce: ranks add bin counts into one histogram", vars: () => [["ranks", `${ranks}`], ["traffic", "bins × experts"]] },
-  { id: "bhat", block: "allreduce", lines: [2], scene: "allreduce", stage: 2, pick: "ex", caption: "read the quantile off the pooled histogram", vars: () => [["same as", "sorting all tokens"]] },
-  { id: "apply", block: "apply", lines: [0, 1], visAt: 1, scene: "apply", caption: "one update later the next batch is already balanced", vars: () => [] },
+  { id: "limit", block: "limit", lines: [0], scene: "limit", caption: "A fixed ± γ nudge cannot fit every case: too small and balancing crawls, too big and the loads keep overshooting.", vars: () => [["n experts (K3)", "896"], ["k", "16"]] },
+  { id: "logit", block: "scores", lines: [0], scene: "scores", stage: 0, pick: "tok", caption: "The router gives every token a raw number for each expert saying how much that token wants it.", vars: () => [["B tokens", `${m}`], ["N experts", `${n}`]] },
+  { id: "sigmoid", block: "scores", lines: [1], scene: "scores", stage: 1, pick: "tok", caption: "Squash each raw number into a 0-to-1 score, one expert at a time, so the scores are easy to compare.", vars: () => [["s", "σ(z)"]] },
+  { id: "addb", block: "scores", lines: [2], scene: "scores", stage: 2, pick: "tok", caption: "Add each expert's bias to its score: this nudge only decides who gets picked, not how much they count.", vars: () => [["b", "0 for now"]] },
+  { id: "topk1", block: "cutoff", lines: [0], scene: "cutoff", stage: 0, pick: "tok", caption: "For each token, rank the experts by biased score and keep the best k+1: the k winners plus the first runner-up.", vars: () => [["k", `${k}`], ["keep", `k+1 = ${k + 1}`]] },
+  { id: "cutoff", block: "cutoff", lines: [1], scene: "cutoff", stage: 1, pick: "tok", caption: "The runner-up's score is that token's cutoff α: an expert has to beat it to be one of the k winners.", vars: () => [["k", `${k}`], ["α", "(k+1)-th"]] },
+  { id: "margin", block: "margin", lines: [0], scene: "margin", pick: "tok", caption: "Subtract the cutoff from every score, so each number says how far an expert is above (win) or below (lose) for that token.", vars: () => [["margin", "s_ij − α_i"]] },
+  { id: "q", block: "quantile", lines: [0], scene: "quantile", stage: 0, pick: "ex", caption: "Each expert should win k/n of the tokens, so we need a line that leaves exactly that fraction of its margins on the right.", vars: () => [["target", `k/n = ${(k / n).toFixed(2)}`], ["quantile", `${(1 - k / n).toFixed(2)}`], ["K3", "1 − 16/896 ≈ 0.982"]] },
+  { id: "quantile", block: "quantile", lines: [1], scene: "quantile", stage: 1, pick: "ex", caption: "Find that line, then shift the expert's scores by minus its position, so exactly k/n of the tokens now win it.", vars: () => [["target", `k/n = ${(k / n).toFixed(2)}`], ["quantile", `${(1 - k / n).toFixed(2)}`]] },
+  { id: "center", block: "center", lines: [0], scene: "center", pick: "ex", caption: "Subtract the average bias from every expert: no ranking changes, but the biases cannot drift away over time.", vars: () => [["mean b̂", Math.abs(QB0.bhat.reduce((a, x) => a + x, 0) / n) < 1e-9 ? "0" : (QB0.bhat.reduce((a, x) => a + x, 0) / n).toFixed(3)]] },
+  { id: "onegpu", block: "onegpu", lines: [1], scene: "onegpu", pick: "ex", caption: "Everything so far assumed one GPU holds all the tokens, so we can simply sort each column and read the quantile exactly.", vars: () => [["tokens on the GPU", `${m}`], ["cost", "sort B per expert"]] },
+  { id: "hist", block: "allreduce", lines: [0], scene: "allreduce", stage: 0, pick: "ex", caption: "A real batch is too big to sort, so each GPU just counts its own tokens' margins into bins.", vars: () => [["ranks", `${ranks}`], ["bins / expert", `${NB} here · few hundred in K3`]] },
+  { id: "reduce", block: "allreduce", lines: [1], scene: "allreduce", stage: 1, pick: "ex", caption: "Add the GPUs' bin counts together: that is the whole batch's histogram, for the cost of a few thousand numbers.", vars: () => [["ranks", `${ranks}`], ["traffic", "bins × experts"]] },
+  { id: "bhat", block: "allreduce", lines: [2], scene: "allreduce", stage: 2, pick: "ex", caption: "Walk the bins until the running count reaches the target load: that spot is the quantile, with no sorting needed.", vars: () => [["same as", "sorting all tokens"]] },
+  { id: "apply", block: "apply", lines: [0, 1], visAt: 1, scene: "apply", caption: "Use the new bias on the next batch, so every batch is balanced by what the one before it revealed.", vars: () => [] },
   ...SNAPS.map((t) => ({
-    id: `t${t}`, block: "race", lines: [1, 2], visAt: 1, scene: "race", t, caption: `step ${t}: quantile vs sign-step balance`,
+    id: `t${t}`, block: "race", lines: [1, 2], visAt: 1, scene: "race", t, caption: `After ${t} updates: quantile balancing is already even, while the sign rule is still creeping toward it.`,
     vars: () => [["CV sign", SIGN[t].cv.toFixed(2)], ["CV quantile", QB[t].cv.toFixed(2)], ...(t === 50 ? [["inference", "bias frozen"]] : [])],
   })),
 ];
@@ -105,8 +117,9 @@ function Hist({ x, y, w, h, counts, lo, hi, thr, color, title, maxC, hlBin }) {
   );
 }
 
-function Scene({ step, tok, ex, setEx }) {
-  const p = useProgress(step.id); // 0 → 1 each time a new picture arrives
+// rk = replay counter: bumping it restarts the animation on the same step
+function Scene({ step, tok, ex, setEx, rk = 0 }) {
+  const p = useProgress(`${step.id}:${rk}`, 1500); // 0 → 1 each time a new picture arrives; ↻ replay re-runs it
   const e = ease(p);
   let body = null;
   const d2 = (v) => v.toFixed(2);
@@ -125,21 +138,45 @@ function Scene({ step, tok, ex, setEx }) {
         <text x={30} y={364} fontFamily={mono} fontSize="11" fill={T.dim}>yellow dashed = fair share · x axis: training step 0–60</text>
       </g>
     );
+  } else if (step.scene === "scores") {
+    const sc = B0[tok];
+    const z = sc.map((v) => Math.log(v / (1 - v))); // logit recovered from s = sigmoid(z)
+    const zmx = Math.max(...z, 1) * 1.12, zmn = Math.min(...z, 0);
+    const st = step.stage;
+    const sAnim = sc.map((v) => lerp(0, v, e)); // s grows from 0 as the sigmoid is applied
+    const sbAnim = sc.map((v) => lerp(0, v, e));
+    const all = (f) => sc.map((_, j) => f(j)).join(",\\;\\;");
+    body = (
+      <g>
+        {st === 0 && <Bars x={40} y={80} w={520} h={230} values={z.map((v) => lerp(0, v, e))} max={zmx} min={zmn} fmt={f2} title={`TOKEN x${tok} · LOGIT z = x · w_j`} labels={XC.map((_, j) => `E${j}`)} />}
+        {st === 1 && <Bars x={30} y={80} w={380} h={230} values={z} max={zmx} min={zmn} fmt={f2} title="LOGIT z" labels={XC.map((_, j) => `E${j}`)} />}
+        {st === 1 && <Bars x={450} y={80} w={380} h={230} values={sAnim} max={1} fmt={f2} title="SCORE s = σ(z)" labels={XC.map((_, j) => `E${j}`)} />}
+        {st === 2 && <Bars x={30} y={80} w={380} h={230} values={sc} max={1} fmt={f2} title="SCORE s" labels={XC.map((_, j) => `E${j}`)} />}
+        {st === 2 && <Bars x={450} y={80} w={380} h={230} values={sbAnim} max={1} fmt={f2} title="s + b  (b = 0)" labels={XC.map((_, j) => `E${j}`)} />}
+        <Tex x={40} y={340} w={800} h={32} size={14} color={T.ink} tex={st === 0
+          ? all((j) => `\\mathrm{E}_{${j}}\\!:\\,z=${c(d2(z[j]), j)}`)
+          : st === 1
+            ? all((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(z[j])}\\to\\sigma=${c(d2(sc[j]), j)}`)
+            : all((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(sc[j])}{+}0\\to ${c(d2(sc[j]), j)}`)} />
+        <text x={40} y={392} fontFamily={mono} fontSize="11.5" fill={T.dim}>
+          {st === 0 ? `token x${tok}: one logit per expert, any real number · expert 0 is the popular one` : st === 1 ? "each expert scored on its own: scores need not sum to 1" : "b is selection-only: it steers the top-k, the output still uses s"}
+        </text>
+      </g>
+    );
   } else if (step.scene === "cutoff") {
     const r = RT0[tok];
     const cut = order(B0[tok]);
-    const sv = step.stage === 0 ? B0[tok].map((v) => lerp(0, v, e)) : B0[tok]; // scores rise from 0 (s + b, b = 0)
+    const sv = B0[tok]; // s + b already shown in the previous steps
     const aNow = lerp(1, r.cutoff, e); // the cutoff line slides down to the (k+1)-th score
-    const cn = (v) => (step.stage === 0 ? lerp(0, v, e) : v);
     body = (
       <g>
         <Bars
           x={40} y={80} w={520} h={230} values={sv} max={1} ideal={step.stage >= 1 ? aNow : undefined} idealLabel="α" fmt={f2}
-          title={`TOKEN x${tok} · SCORE s + b  (b = 0 for now)`} dim={B0[tok].map((_, j) => j).filter((j) => !r.sel.includes(j) && j !== cut[k])} flag={step.stage >= 1 ? [cut[k]] : []}
+          title={`TOKEN x${tok} · SCORE s + b  (b = 0 for now)`} labels={XC.map((_, j) => `E${j}`)} dim={B0[tok].map((_, j) => j).filter((j) => !r.sel.includes(j) && j !== cut[k])} flag={step.stage >= 1 ? [cut[k]] : []}
         />
         <Tex x={40} y={340} w={800} h={32} size={14} color={T.ink} tex={step.stage === 0
-          ? `\\mathrm{TopK}(s_{x_{${tok}}}+b,\\,k{+}1)=\\{${cut.slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${c(d2(cn(B0[tok][j])), j)}`).join(",\\;")}\\}`
-          : `\\alpha_{x_{${tok}}}=(k{+}1)\\text{-th largest}=\\mathrm{E}_{${cut[k]}}\\!:\\,${c(d2(aNow), cut[k])}`} />
+          ? `${cut.slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${c(d2(B0[tok][j]), j)}`).join("\\;\\ge\\;")}\\;\\Big|\\;${cut.slice(k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(B0[tok][j])}`).join("\\;\\ge\\;")}`
+          : `${cut.slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${c(d2(B0[tok][j]), j)}`).join("\\;\\to\\;")}\\quad\\Rightarrow\\quad \\alpha_{x_{${tok}}}=${c(d2(r.cutoff), cut[k])}`} />
         <g fontFamily={mono} fontSize="11.5" fill={T.soft}>
           <text x={600} y={120}>top-{k}: routed</text>
           {step.stage >= 1 && <text x={600} y={142} fill={T.bad}>(k+1)-th, red ring:</text>}
@@ -162,20 +199,40 @@ function Scene({ step, tok, ex, setEx }) {
           <g key={i} opacity={i === tok ? 1 : 0.7}>
             <text x={x0 - 6} y={y0 + i * ch + ch / 2 + 3} textAnchor="end" fontFamily={mono} fontSize="11" fill={i === tok ? T.ink : T.dim}>x{i}</text>
             {QB0.margins[i].map((v, j) => {
-              const val = shift(i, j); // animates from s_ij to s_ij − α_i
+              const val = shift(i, j); // colour animates from s_ij to s_ij − α_i; the text shows both ends at once
+              const fin = v; // final margin
+              const fm = Math.abs(fin) < 1e-9 ? "0" : Math.abs(fin) < 0.01 ? fin.toFixed(3) : (fin > 0 ? "+" : "") + fin.toFixed(2);
               return (
                 <g key={j}>
                   <rect x={x0 + j * cw} y={y0 + i * ch} width={cw - 3} height={ch - 3} rx={3} fill={div(val)} stroke={i === tok ? T.ink : "none"} />
-                  <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + i * ch + ch / 2 + 3} textAnchor="middle" fontFamily={mono} fontSize="11" fontWeight={i === tok ? 700 : 400} fill={T.ink}>{Math.abs(val) < 1e-9 ? "0" : Math.abs(val) < 0.01 ? val.toFixed(3) : (val > 0 ? "+" : "") + val.toFixed(2)}</text>
+                  <text x={x0 + j * cw + (cw - 3) / 2} y={y0 + i * ch + ch / 2 + 3} textAnchor="middle" fontFamily={mono} fontSize="10.5" fontWeight={i === tok ? 700 : 400} fill={T.ink}>{B0[i][j].toFixed(2)}<tspan fill={T.dim}> → </tspan>{fm}</text>
                 </g>
               );
             })}
           </g>
         ))}
-        <text x={x0} y={y0 + rows * ch + 20} fontFamily={mono} fontSize="10" fill={T.dim}>warm = above the cutoff · cool = below</text>
+        <text x={x0} y={y0 + rows * ch + 20} fontFamily={mono} fontSize="10" fill={T.dim}>each cell: score s → margin s − α</text>
+        <text x={x0} y={y0 + rows * ch + 36} fontFamily={mono} fontSize="10" fill={T.dim}>warm = above the cutoff · cool = below</text>
         <Bars x={470} y={90} w={370} h={200} values={tokVals} max={Math.max(...B0[tok]) * 1.12} min={Math.min(...QB0.margins[tok])} ideal={alpha * (1 - e)} idealLabel="α" fmt={f2} title={`TOKEN x${tok} · MARGIN s − α`} labels={XC.map((_, j) => `E${j}`)} />
-        <Tex x={470} y={314} w={390} h={66} size={12.5} color={T.ink} tex={`\\begin{gathered}${order(B0[tok]).slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(B0[tok][j])}-${d2(alpha * e)}=${c(d2(B0[tok][j] - alpha * e), j)}`).join("\\\\")}\\end{gathered}`} />
+        <Tex x={470} y={314} w={390} h={66} size={12.5} color={T.ink} tex={`\\begin{gathered}${order(B0[tok]).slice(0, k + 1).map((j) => `\\mathrm{E}_{${j}}\\!:\\,${d2(B0[tok][j])}-${d2(alpha)}=${c(d2(B0[tok][j] - alpha), j)}`).join("\\\\")}\\end{gathered}`} />
         <text x={470} y={400} fontFamily={mono} fontSize="11" fill={T.dim}>routed experts &gt; 0 · the (k+1)-th is exactly 0</text>
+      </g>
+    );
+  } else if (step.scene === "onegpu") {
+    const v = col(ex).slice().sort((a, b) => a - b); // all m margins of one expert, sorted: [m]
+    const lo = v[0], hi = v[v.length - 1], thr = QB0.thr[ex];
+    const bx = (i) => 62 + i * 11.9, by = (x) => 290 - ((x - lo) / (hi - lo)) * 170;
+    body = (
+      <g>
+        <rect x={40} y={56} width={780} height={252} rx={10} fill={T.well} stroke={T.wire} strokeWidth={1.5} />
+        <text x={56} y={78} fontFamily={mono} fontSize="12" fontWeight="700" fill={T.wire}>GPU 0 · all {m} tokens</text>
+        <text x={W - 56} y={78} textAnchor="end" fontFamily={mono} fontSize="10.5" fill={T.dim}>E{ex}'s margins, sorted small → large</text>
+        {v.map((x, i) => <rect key={i} x={bx(i)} y={290 - (290 - by(x)) * e} width={9.5} height={(290 - by(x)) * e + 1} rx={1.5} fill={x > thr ? XC[ex] : T.rule} />)}
+        <line x1={bx(m / 2) - 1.2} x2={bx(m / 2) - 1.2} y1={96} y2={296} stroke={T.wire} strokeWidth={2} />
+        <text x={bx(m / 2) - 8} y={104} textAnchor="end" fontFamily={mono} fontSize="10.5" fill={T.dim}>{m / 2} below</text>
+        <text x={bx(m / 2) + 6} y={104} fontFamily={mono} fontSize="10.5" fill={XC[ex]} fontWeight="700">{m / 2} above</text>
+        <Tex x={40} y={322} w={780} h={34} size={14} color={T.ink} tex={`\\text{sort the }${m}\\text{ margins},\\ \\mathrm{quantile}_{${d2(1 - k / n)}}=${c(d2(thr), ex)}\\ \\Rightarrow\\ \\hat b_{\\mathrm{E}_{${ex}}}=${c(d2(-thr), ex)}`} />
+        <text x={40} y={392} fontFamily={mono} fontSize="11.5" fill={T.dim}>exact, but every margin has to be on this one device</text>
       </g>
     );
   } else if (step.scene === "quantile") {
@@ -288,6 +345,7 @@ const order = (row) => row.map((_, j) => j).sort((a, b) => row[b] - row[a]);
 export { Scene as KimiScene, STEPS as KIMI_STEPS, BLOCKS as KIMI_BLOCKS };
 
 export default function KimiView() {
+  const [rk, setRk] = useState(0); // replay counter
   const [tok, setTok] = useState(0);
   const [ex, setEx] = useState(0);
   const picker = (label, val, set, count) => (
@@ -304,8 +362,18 @@ export default function KimiView() {
       subtitle={`bias from a score quantile instead of a ± γ nudge · toy: n=${n} experts, k=${k}, ${m} tokens`}
       blocks={BLOCKS}
       steps={STEPS}
-      header={(step) => (step.pick === "tok" ? picker("follow token", tok, setTok, LB.T) : step.pick === "ex" ? picker("follow expert", ex, setEx, n) : null)}
-      scene={(step) => <Scene step={step} tok={tok} ex={ex} setEx={setEx} />}
+      header={(step) => (
+        <>
+          {step.pick === "tok" ? picker("follow token", tok, setTok, LB.T) : step.pick === "ex" ? picker("follow expert", ex, setEx, n) : null}
+          <button onClick={() => setRk((r) => r + 1)} style={{ ...btn(false, false), height: 28, padding: "0 10px" }} title="run this step's animation again">↻ replay</button>
+        </>
+      )}
+      scene={(step) => (
+        <>
+          <Scene step={step} tok={tok} ex={ex} setEx={setEx} rk={rk} />
+          {K3_STEPS.has(step.id) && <K3Panel step={step} rk={rk} />}
+        </>
+      )}
       glossary={KIMI_GLOSSARY}
       shapes={(step) => KIMI_SHAPES[step.block === "race" ? "race" : step.sid]}
       legend={<span>source: Kimi K3 technical report · toy numbers, not K3's (896 experts, k = 16)</span>}
