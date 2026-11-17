@@ -132,7 +132,7 @@ export function TagStrip({ rows }) {
     <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "8px 12px", background: T.well, border: `1px solid ${T.rule}`, borderRadius: 8 }}>
       {ins.map(tag)}
       {mid.length > 0 && <>{ins.length > 0 && <span style={{ color: T.accent2 }}>·</span>}{mid.map(tag)}</>}
-      {outs.length > 0 && <>{(ins.length > 0 || mid.length > 0) && <span style={{ color: T.accent2, fontFamily: mono, fontSize: 14 }}>→</span>}{outs.map(tag)}</>}
+      {outs.length > 0 && <>{(ins.length > 0 || mid.length > 0) && <span style={{ color: T.accent2, fontFamily: mono, fontSize: 17 }}>→</span>}{outs.map(tag)}</>}
     </div>
   );
 }
@@ -146,9 +146,9 @@ export function Mat({ name, rows, cols, rl, cl, shape, color = T.accent, stripes
   const colLab = cl ?? (ds ? <DimChip s={ds[ds.length - 1]} short /> : cols);
   return (
     <div style={{ display: "grid", justifyItems: "center", gap: 4 }}>
-      <div style={{ fontFamily: mono, fontSize: 12, fontWeight: 700, color }}>{name}</div>
+      <div style={{ fontFamily: mono, fontSize: 15, fontWeight: 700, color }}>{name}</div>
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <span style={{ fontFamily: mono, fontSize: 10, color: T.dim, writingMode: "vertical-rl", transform: "rotate(180deg)" }}>{rowLab}</span>
+        <span style={{ fontFamily: mono, fontSize: 13, color: T.dim, writingMode: "vertical-rl", transform: "rotate(180deg)" }}>{rowLab}</span>
         <div style={{
           width: w, height: h, borderRadius: 4, border: `1.5px solid ${color}`, background: fill ?? `${color}22`, position: "relative", overflow: "hidden",
           boxShadow: glow ? `0 0 0 4px ${color}22` : "none", transition: "all .5s",
@@ -162,15 +162,15 @@ export function Mat({ name, rows, cols, rl, cl, shape, color = T.accent, stripes
           )}
         </div>
       </div>
-      <span style={{ fontFamily: mono, fontSize: 10, color: T.dim }}>{colLab}</span>
+      <span style={{ fontFamily: mono, fontSize: 13, color: T.dim }}>{colLab}</span>
       {ds && <ShapeTag shape={ds} size={12.5} />}
-      {note && <span style={{ fontFamily: mono, fontSize: 10, color: T.wire }}>{note}</span>}
+      {note && <span style={{ fontFamily: mono, fontSize: 13, color: T.wire }}>{note}</span>}
     </div>
   );
 }
 
 export const Op = ({ children, color = T.accent2 }) => (
-  <div style={{ fontFamily: mono, fontSize: 13, color, display: "grid", placeItems: "center", padding: "0 4px", whiteSpace: "nowrap" }}>{children}</div>
+  <div style={{ fontFamily: mono, fontSize: 16, color, display: "grid", placeItems: "center", padding: "0 4px", whiteSpace: "nowrap" }}>{children}</div>
 );
 
 export const Row = ({ children, gap = 14, wrap = true, style }) => (
@@ -178,7 +178,7 @@ export const Row = ({ children, gap = 14, wrap = true, style }) => (
 );
 
 export const Label = ({ children, color = T.dim }) => (
-  <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.1em", color, textTransform: "uppercase" }}>{children}</div>
+  <div style={{ fontFamily: mono, fontSize: 13, letterSpacing: "0.1em", color, textTransform: "uppercase" }}>{children}</div>
 );
 
 // a vector drawn as a row of bars (values centred on 0)
@@ -213,13 +213,13 @@ function Shape({ dims, hi = [], tone = T.soft, hiTone = T.accent2 }) {
   );
 }
 const num = (v) => (typeof v === "number" ? v : 1);
-export function MM({ a, b, c, op = "@", note, times }) {
+export function MM({ a, b, c, op = "@", note, times, cost }) {
   const [an, ad] = a, [bn, bd] = b, [cn, cd] = c;
   const k = ad[ad.length - 1];
   const macs = cd.reduce((p, v) => p * num(v), 1) * num(k) * (times ?? 1);
   const mac = macs >= 1e9 ? `${(macs / 1e9).toFixed(2)} GMAC` : macs >= 1e6 ? `${(macs / 1e6).toFixed(1)} MMAC` : macs >= 1e3 ? `${(macs / 1e3).toFixed(1)} KMAC` : `${macs} MAC`;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "baseline", fontFamily: mono, fontSize: 12.5, lineHeight: 1.5 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "baseline", fontFamily: mono, fontSize: 15, lineHeight: 1.5 }}>
       <div style={{ overflowWrap: "anywhere" }}>
         <b style={{ color: T.ink }}>{an}</b> <Shape dims={ad} hi={[ad.length - 1]} />
         <span style={{ color: T.accent2, fontWeight: 700 }}> {op} </span>
@@ -227,37 +227,37 @@ export function MM({ a, b, c, op = "@", note, times }) {
         <span style={{ color: T.dim }}> → </span>
         <b style={{ color: T.accent }}>{cn}</b> <Shape dims={cd} tone={T.accent} />
         {times && <span style={{ color: T.wire }}>  × {times}</span>}
-        {note && <div style={{ fontSize: 11, color: T.dim, paddingLeft: 12 }}>{note}</div>}
+        {note && <div style={{ fontSize: 14, color: T.dim, paddingLeft: 12 }}>{note}</div>}
       </div>
-      <span style={{ fontSize: 10.5, color: T.dim, whiteSpace: "nowrap" }}>{mac}</span>
+      <span style={{ fontSize: 13, color: T.dim, whiteSpace: "nowrap" }}>{cost ?? mac}</span>
     </div>
   );
 }
 // a non-matmul line in the same card (reshape, softmax, gather, …)
-export const MMNote = ({ children }) => <div style={{ fontFamily: mono, fontSize: 11.5, color: T.soft, paddingLeft: 12, borderLeft: `2px solid ${T.rule}` }}>{children}</div>;
+export const MMNote = ({ children }) => <div style={{ fontFamily: mono, fontSize: 14, color: T.soft, paddingLeft: 12, borderLeft: `2px solid ${T.rule}` }}>{children}</div>;
 
 export function MatMulCard({ children, footer }) {
   return (
     <div style={{ background: T.panel, border: `1px solid ${T.rule}`, borderRadius: 12, padding: "12px 16px", display: "grid", gap: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: mono, fontSize: 10, letterSpacing: "0.12em", color: T.dim }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: mono, fontSize: 13, letterSpacing: "0.12em", color: T.dim }}>
         <span>TENSOR MULTIPLICATIONS · <span style={{ color: T.accent2 }}>pink = contracted dim</span></span><span>multiply-adds (symbol B counted as 1)</span>
       </div>
       {children}
-      {footer && <div style={{ fontFamily: mono, fontSize: 11, color: T.dim, borderTop: `1px solid ${T.rule}`, paddingTop: 6 }}>{footer}</div>}
+      {footer && <div style={{ fontFamily: mono, fontSize: 14, color: T.dim, borderTop: `1px solid ${T.rule}`, paddingTop: 6 }}>{footer}</div>}
     </div>
   );
 }
 
 // the six matmuls inside one pre-LN transformer block, optionally repeated × L
-export function BlockMMs({ B, T: t, D, h, d, M, L, causal, names = {} }) {
+export function BlockMMs({ B, T: t, D, h, d, M, L, causal, act = "GELU", names = {} }) {
   const x = names.x ?? "x";
   return (
     <>
-      <MM a={[`LN(${x})`, [B, t, D]]} b={["W_qkv", [D, 3 * D]]} c={["qkv", [B, t, 3 * D]]} times={L} note={`split + reshape → q, k, v each [${B}, ${h}, ${t}, ${d}]`} />
+      <MM a={[`LN(${x})`, [B, t, D]]} b={["W_qkv", [D, 3 * D]]} c={["qkv", [B, t, 3 * D]]} times={L} note={`+ bias · split + reshape → q, k, v each [${B}, ${h}, ${t}, ${d}]`} />
       <MM a={["q", [B, h, t, d]]} b={["kᵀ", [B, h, d, t]]} c={["S", [B, h, t, t]]} times={L} note={`÷ √${d}${causal ? ", + causal mask (−∞ above diagonal)" : ""}, softmax over the last dim → A`} />
       <MM a={["A", [B, h, t, t]]} b={["v", [B, h, t, d]]} c={["o", [B, h, t, d]]} times={L} note={`concat heads → [${B}, ${t}, ${D}]`} />
       <MM a={["o", [B, t, D]]} b={["W_O", [D, D]]} c={["attn", [B, t, D]]} times={L} note={`${x} = ${x} + attn`} />
-      <MM a={[`LN(${x})`, [B, t, D]]} b={["W_1", [D, M]]} c={["h", [B, t, M]]} times={L} note="GELU" />
+      <MM a={[`LN(${x})`, [B, t, D]]} b={["W_1", [D, M]]} c={["h", [B, t, M]]} times={L} note={act} />
       <MM a={["h", [B, t, M]]} b={["W_2", [M, D]]} c={["mlp", [B, t, D]]} times={L} note={`${x} = ${x} + mlp`} />
     </>
   );

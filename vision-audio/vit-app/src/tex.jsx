@@ -19,3 +19,10 @@ export function Tex({ x, y, tex, w = 320, h = 28, size = 13, color = T.soft, ali
     </foreignObject>
   );
 }
+
+// block math in normal HTML flow (multi-line `aligned` works here)
+export function TexBlock({ tex, size = 15, color = T.ink }) {
+  let h;
+  try { h = katex.renderToString(tex, { throwOnError: false, strict: false, displayMode: true, fleqn: true }); } catch { h = tex; }
+  return <div style={{ fontSize: size, color, overflowX: "auto" }} dangerouslySetInnerHTML={{ __html: h }} />;
+}

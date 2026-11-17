@@ -2,14 +2,18 @@ import { useState } from "react";
 import { T, mono } from "./theme";
 import ViTView from "./ViTView";
 import ClipView from "./ClipView";
+import SizesView from "./SizesView";
+import SiglipView from "./SiglipView";
 
 const VIEWS = [
   { id: "vit", label: "Vision Transformer", sub: "patches · CLS · encoder blocks · head", C: ViTView },
   { id: "clip", label: "CLIP", sub: "two encoders · contrastive loss · zero-shot", C: ClipView },
+  { id: "siglip", label: "SigLIP", sub: "sigmoid loss · ring · SigLIP 2", C: SiglipView },
+  { id: "names", label: "Model names", sub: "what B/32, B/16, L/14 mean", C: SizesView },
 ];
 
 export default function App() {
-  const [view, setView] = useState(() => (location.hash === "#clip" ? "clip" : "vit"));
+  const [view, setView] = useState(() => (["#clip", "#siglip", "#names"].includes(location.hash) ? location.hash.slice(1) : "vit"));
   const { C } = VIEWS.find((v) => v.id === view);
   const pick = (id) => { setView(id); history.replaceState(null, "", `#${id}`); };
   return (
@@ -19,10 +23,10 @@ export default function App() {
           const active = v.id === view;
           return (
             <button key={v.id} onClick={() => pick(v.id)}
-              style={{ fontFamily: mono, fontSize: 12, padding: "8px 14px", borderRadius: 8, textAlign: "left", cursor: "pointer",
+              style={{ fontFamily: mono, fontSize: 15, padding: "8px 14px", borderRadius: 8, textAlign: "left", cursor: "pointer",
                 border: `1px solid ${active ? T.accent : T.rule}`, background: active ? `${T.accent}18` : T.panel, color: active ? T.accent : T.soft }}>
               <div style={{ fontWeight: 700 }}>{v.label}</div>
-              <div style={{ fontSize: 9.5, marginTop: 2, color: active ? T.accent : T.dim, opacity: 0.85 }}>{v.sub}</div>
+              <div style={{ fontSize: 12, marginTop: 2, color: active ? T.accent : T.dim, opacity: 0.85 }}>{v.sub}</div>
             </button>
           );
         })}

@@ -1,6 +1,7 @@
 // A line-for-line port of OpenAI CLIP's simple_tokenizer.py, using the real
 // merge file (public/clip_bpe_merges.txt = the 48,894 merges CLIP actually uses).
-// Differences: ftfy.fix_text / html.unescape are skipped (no effect on plain ASCII).
+// Differences: ftfy.fix_text is skipped (only matters for mojibake / ligatures like "ﬁ");
+// html.unescape is done twice, as basic_clean() does, for the common entities.
 // bpe() also returns a trace of every merge, for the walkthrough animation.
 
 // bytes_to_unicode(): printable bytes map to themselves, the rest to U+0100…
@@ -49,8 +50,11 @@ export function buildTokenizer(mergesText) {
     return { pieces: word, trace };
   }
 
+  const ENT = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
+  const unescape = (t) => t.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) =>
+    e[0] === "#" ? String.fromCodePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : +e.slice(1)) : ENT[e.toLowerCase()] ?? m);
   function words(text) {
-    const clean = text.replace(/\s+/g, " ").trim().toLowerCase();
+    const clean = unescape(unescape(text)).trim().replace(/\s+/g, " ").trim().toLowerCase();
     return clean.match(PAT) ?? [];
   }
 
@@ -64,12 +68,14 @@ export function buildTokenizer(mergesText) {
     });
   }
 
-  // tokenize() from clip.py: <sot> + ids + <eot>, zero-padded / truncated to ctx
+  // tokenize() from clip.py: <sot> + ids + <eot>, zero-padded to ctx. Too long: clip.tokenize
+  // raises by default; with truncate=True it cuts to ctx and forces <eot> into the last slot
+  // (what we draw). rawLen = length before cutting.
   function tokenize(text, ctx = 77) {
     let ids = [encoder.get(SOT), ...encodeDetailed(text).flatMap((d) => d.ids), encoder.get(EOT)];
-    const truncated = ids.length > ctx;
+    const rawLen = ids.length, truncated = rawLen > ctx;
     if (truncated) ids = [...ids.slice(0, ctx - 1), encoder.get(EOT)];
-    return { ids: [...ids, ...Array(ctx - ids.length).fill(0)], len: ids.length, truncated };
+    return { ids: [...ids, ...Array(ctx - ids.length).fill(0)], len: ids.length, rawLen, truncated };
   }
 
   return { encodeDetailed, tokenize, vocabSize: vocab.length, nMerges: merges.length, encoder, ranks };

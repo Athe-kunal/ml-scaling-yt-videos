@@ -13,13 +13,13 @@ const CODE = {
   image: ["x = load_image()   # [B, 3, H, W]"],
   patchify: ["p = x.unfold(2, P, P).unfold(3, P, P)   # [B, 3, g, g, P, P]", "p = p.permute(0, 2, 3, 4, 5, 1)   # [B, g, g, P, P, 3]"],
   flatten: ["p = p.reshape(B, N, P*P*3)   # [B, N, P²·3]  raster order"],
-  embed: ["tok = p @ W_E + b_E   # [B,N,P²·3]·[P²·3,D] → [B,N,D]", "# identical to nn.Conv2d(3, D, kernel_size=P, stride=P)"],
+  embed: ["tok = p @ W_E + b_E   # [B,N,P²·3]·[P²·3,D] → [B,N,D]", "# equivalent to nn.Conv2d(3, D, kernel_size=P, stride=P): same weights, rearranged"],
   cls: ["cls = self.cls_token.expand(B, -1, -1)   # learnable [1,1,D] → [B,1,D]", "x = torch.cat([cls, tok], dim=1)   # [B, N+1, D]"],
   pos: ["x = x + self.pos_embed   # learnable [1, N+1, D], broadcast over B"],
   ln1: ["h = self.norm1(x)   # LayerNorm over D, per token  [B,T,D]"],
-  qkv: ["qkv = h @ W_qkv   # [B,T,D]·[D,3D] → [B,T,3D]", "q, k, v = qkv.reshape(B,T,3,heads,d).permute(2,0,3,1,4)", "# each → [B, heads, T, d],  d = D / heads"],
-  attn: ["A = q @ k.transpose(-2, -1) / sqrt(d)   # [B,h,T,d]·[B,h,d,T] → [B,h,T,T]", "A = A.softmax(dim=-1)   # each row sums to 1"],
-  mix: ["o = A @ v   # [B,h,T,T]·[B,h,T,d] → [B,h,T,d]", "o = o.transpose(1, 2).reshape(B, T, D)   # concat heads", "x = x + o @ W_O   # [D,D] projection, residual add"],
+  qkv: ["qkv = h @ W_qkv + b_qkv   # [B,T,D]·[D,3D] → [B,T,3D]", "q, k, v = qkv.reshape(B,T,3,heads,d).permute(2,0,3,1,4)", "# each → [B, heads, T, d],  d = D / heads"],
+  attn: ["A = (q @ k.transpose(-2, -1)) * d ** -0.5   # [B,h,T,d]·[B,h,d,T] → [B,h,T,T]", "A = A.softmax(dim=-1)   # each row sums to 1"],
+  mix: ["o = A @ v   # [B,h,T,T]·[B,h,T,d] → [B,h,T,d]", "o = o.transpose(1, 2).reshape(B, T, D)   # concat heads", "x = x + o @ W_O + b_O   # [D,D] projection, residual add"],
   mlp: ["h = self.norm2(x)", "h = gelu(h @ W_1 + b_1)   # [B,T,D] → [B,T,4D]", "x = x + h @ W_2 + b_2   # [B,T,4D] → [B,T,D], residual"],
   stack: ["for blk in self.blocks:   # × L", "    x = blk(x)   # [B,T,D] → [B,T,D]  shape never changes"],
   clsout: ["x = self.norm(x)", "z = x[:, 0]   # [B, D]  keep only the CLS token"],
@@ -60,16 +60,25 @@ const FLOW = [
     group: "classification",
     items: [
       { id: "clsout", label: "take the CLS token", sub: "[B,T,D] → [B,D]", code: CODE.clsout },
-      { id: "head", label: "linear head + softmax", sub: "D → K classes", code: CODE.head },
+      { id: "head", label: "linear head + softmax", sub: "fine-tuning head · D → K", code: CODE.head },
       { id: "loss", label: "cross-entropy loss", sub: "−log p[true class]", code: CODE.loss },
     ],
   },
 ];
 
-const PRED = [
-  ["golden retriever", 0.62], ["Labrador retriever", 0.17], ["cocker spaniel", 0.07], ["tennis ball", 0.03], ["teddy bear", 0.02],
-];
+// illustrative logits over the 1000 ImageNet classes; the top-5 and the loss are
+// computed from them with a real softmax, so every number on screen agrees
 const TRUE_IDX = 207;
+const TOP_NAMES = { 207: "golden retriever", 208: "Labrador retriever", 219: "cocker spaniel", 852: "tennis ball", 850: "teddy bear" };
+const LOGITS = (() => {
+  const r = mulberry(11);
+  const v = Array.from({ length: 1000 }, () => (r() - 0.5) * 3);
+  [[207, 9], [208, 7.9], [219, 7.1], [852, 6.3], [850, 5.9]].forEach(([k, x]) => (v[k] = x));
+  return v;
+})();
+const PROBS = (() => { const m = Math.max(...LOGITS), e = LOGITS.map((x) => Math.exp(x - m)), z = e.reduce((a, b) => a + b, 0); return e.map((x) => x / z); })();
+const PRED = Object.keys(TOP_NAMES).map((k) => [TOP_NAMES[k], PROBS[k]]).sort((a, b) => b[1] - a[1]);
+const LOSS = -Math.log(PROBS[TRUE_IDX]);
 
 // ------------------------------------------------------------ pixel-level canvas
 const CW = 880, CH = 400, IMG = { x: 24, y: 48, s: 300 }, SEQ = { x: 372, y: 40, w: 488, h: 340 };
@@ -84,7 +93,7 @@ function seqLayout(Tn, g) {
 
 const txt = (x, s, X, Y, color = T.dim, size = 11, align = "left", weight = 400) => {
   x.fillStyle = color;
-  x.font = `${weight} ${size}px 'IBM Plex Mono', monospace`;
+  x.font = `${weight} ${Math.round(size * 1.2)}px 'IBM Plex Mono', monospace`;
   x.textAlign = align;
   x.fillText(s, X, Y);
 };
@@ -198,7 +207,9 @@ function PatchCanvas({ stage, img, d, stats, p }) {
       }
           }
     // index of the first token in each wrapped row
-    if (L.tile >= 9) for (let r = 0; r < L.rows; r++) txt(x, `${r * L.cols}`, SEQ.x - 6, SEQ.y + r * L.tile + L.tile * 0.65, T.dim, Math.min(10, L.tile * 0.8), "right");
+    // before CLS exists slot s holds patch s−1, so label rows with the patch index
+    const preCls = stage === "flatten" || stage === "embed";
+    if (L.tile >= 9) for (let r = 0; r < L.rows; r++) txt(x, `${preCls ? Math.max(0, r * L.cols - 1) : r * L.cols}`, SEQ.x - 6, SEQ.y + r * L.tile + L.tile * 0.65, T.dim, Math.min(10, L.tile * 0.8), "right");
     // CLS slot
     const [cx, cy] = L.at(0), cs = L.tile - L.gap;
     if (stage === "cls" || stage === "pos") {
@@ -229,7 +240,7 @@ function PatchCanvas({ stage, img, d, stats, p }) {
       for (let i = 0; i < P * P; i++) { const o = ((py + Math.floor(i / P)) * img.size + px + (i % P)) * 4; im.data.set([img.data[o], img.data[o + 1], img.data[o + 2], 255], i * 4); }
       so.putImageData(im, 0, 0);
       x.imageSmoothingEnabled = false; x.drawImage(strip, ox + 86, oy - 20, 14, 230); x.imageSmoothingEnabled = true;
-      txt(x, `${P * P * 3}`, ox + 93, oy + 226, T.accent2, 10, "center");
+      txt(x, `${P * P} px × 3 = ${P * P * 3}`, ox + 93, oy + 226, T.accent2, 10, "center");
       txt(x, "×", ox + 117, oy + 96, T.ink, 16, "center");
       x.fillStyle = `${T.accent2}22`; x.strokeStyle = T.accent2; x.lineWidth = 1.2;
       x.fillRect(ox + 132, oy + 30, 80, 120); x.strokeRect(ox + 132, oy + 30, 80, 120);
@@ -251,7 +262,7 @@ function PatchCanvas({ stage, img, d, stats, p }) {
         txt(x, s, IMG.x + 20, IMG.y + 120 + i * 20, i < 3 ? T.ink : T.soft, 12));
     }
     if (stage === "pos") {
-      panel("POSITION EMBEDDING SIMILARITY (learned, toy)");
+      panel("POSITION-EMBEDDING SIMILARITY · toy pattern");
       const picks = [0, hi, N - 1], ms = 88;
       picks.forEach((k, j) => {
         const a = stats.feats[k], X = IMG.x + 4 + j * (ms + 10), Y = IMG.y + 40, uu = ms / g;
@@ -262,8 +273,12 @@ function PatchCanvas({ stage, img, d, stats, p }) {
         x.strokeStyle = T.accent; x.lineWidth = 1.5; x.strokeRect(X + a.col * uu, Y + a.row * uu, Math.max(uu, 2), Math.max(uu, 2));
         txt(x, `patch (${a.row},${a.col})`, X + ms / 2, Y + ms + 16, T.soft, 10, "center");
       });
-      ["without this the encoder sees a bag of", "patches with no order. Pos-emb of", "nearby patches end up similar:", "same row/col light up."].forEach((s, i) => txt(x, s, IMG.x + 4, IMG.y + 180 + i * 18, T.soft, 11.5));
-      txt(x, `E_pos  [1, ${Tn}, ${d.D}]`, IMG.x + 4, IMG.y + 268, T.accent, 12, "left", 700);
+      txt(x, "nearby patches → similar rows", IMG.x + 4, IMG.y + 182, T.soft, 12);
+      txt(x, `E_pos  [1, ${Tn}, ${d.D}]`, IMG.x + 4, IMG.y + 214, T.ink, 13, "left", 700);
+      x.fillStyle = "hsl(0 0% 85%)"; x.fillRect(IMG.x + 4, IMG.y + 230, 14, 10);
+      txt(x, "row 0 → CLS", IMG.x + 26, IMG.y + 240, T.accent, 14, "left", 700);
+      txt(x, `rows 1…${N} → patches`, IMG.x + 26, IMG.y + 262, T.soft, 12);
+      if (d.res !== 224) txt(x, `at ${d.res}: the 224-px grid is 2-D interpolated to ${d.g}×${d.g}`, IMG.x + 4, IMG.y + 288, T.wire, 10.5);
     }
   };
 
@@ -272,7 +287,7 @@ function PatchCanvas({ stage, img, d, stats, p }) {
 
 // ------------------------------------------------------------ encoder-block scenes
 const SUBS = [
-  { k: "in", t: "x  [B,T,D]" }, { k: "ln1", t: "LayerNorm" }, { k: "mha", t: "Multi-Head Attention" }, { k: "add1", t: "⊕" },
+  { k: "in", t: "x  [B,T,D]" }, { k: "ln1", t: "LayerNorm" }, { k: "mha", t: "Self-Attention" }, { k: "add1", t: "⊕" },
   { k: "ln2", t: "LayerNorm" }, { k: "mlp", t: "MLP  D→4D→D" }, { k: "add2", t: "⊕" }, { k: "out", t: "x  [B,T,D]" },
 ];
 const ACTIVE = { ln1: ["ln1"], qkv: ["mha"], attn: ["mha"], mix: ["mha", "add1"], mlp: ["ln2", "mlp", "add2"], stack: SUBS.map((s) => s.k) };
@@ -281,7 +296,7 @@ function BlockDiagram({ id, d }) {
   const on = ACTIVE[id] ?? [];
   const y = (i) => 14 + i * 46;
   return (
-    <svg width={210} height={y(SUBS.length - 1) + 30} style={{ flexShrink: 0 }}>
+    <svg width={232} height={y(SUBS.length - 1) + 30} style={{ flexShrink: 0 }}>
       {/* residual skips */}
       {[[0, 3], [3, 6]].map(([a, b], i) => (
         <path key={i} d={`M105 ${y(a) + 14} H18 V${y(b) + 14} H86`} fill="none" stroke={on.includes(i ? "add2" : "add1") ? T.wire : T.rule} strokeWidth="1.4" className={on.includes(i ? "add2" : "add1") ? "flow" : ""} />
@@ -294,9 +309,9 @@ function BlockDiagram({ id, d }) {
             {round ? (
               <circle cx={105} cy={y(i) + 14} r={13} fill={a ? `${T.wire}33` : T.well} stroke={a ? T.wire : T.rule} />
             ) : (
-              <rect x={30} y={y(i)} width={150} height={28} rx={6} fill={a ? `${T.accent}22` : T.well} stroke={a ? T.accent : T.rule} strokeWidth={a ? 1.6 : 1} />
+              <rect x={22} y={y(i)} width={190} height={28} rx={6} fill={a ? `${T.accent}22` : T.well} stroke={a ? T.accent : T.rule} strokeWidth={a ? 1.6 : 1} />
             )}
-            <text x={105} y={y(i) + 18} textAnchor="middle" fontFamily={mono} fontSize={round ? 14 : 11} fill={a ? (round ? T.wire : T.accent) : T.soft} fontWeight={a ? 700 : 400}>{s.k === "in" || s.k === "out" ? `x [B, ${d.Tn}, ${d.D}]` : s.k === "mlp" ? `MLP ${d.D}→${d.M}→${d.D}` : s.t}</text>
+            <text x={105} y={y(i) + 18} textAnchor="middle" fontFamily={mono} fontSize={round ? 17 : 14} fill={a ? (round ? T.wire : T.accent) : T.soft} fontWeight={a ? 700 : 400}>{s.k === "in" || s.k === "out" ? `x [B, ${d.Tn}, ${d.D}]` : s.k === "mlp" ? `MLP ${d.D}→${d.M}→${d.D}` : s.t}</text>
           </g>
         );
       })}
@@ -311,14 +326,14 @@ function LNDetail({ d }) {
   const norm = raw.map((v) => (v - mu) / sd);
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      <Label>one token's vector (first 40 of D = {d.D})</Label>
+      <Label>a random example vector (first 40 of D = {d.D})</Label>
       <Row>
-        <div><Bars v={raw.map((v) => v)} w={260} h={80} color={T.soft} /><div style={{ fontFamily: mono, fontSize: 11, color: T.dim }}>μ = {mu.toFixed(2)}  σ = {sd.toFixed(2)}</div></div>
+        <div><Bars v={raw.map((v) => v)} w={260} h={80} color={T.soft} /><div style={{ fontFamily: mono, fontSize: 14, color: T.dim }}>μ = {mu.toFixed(2)}  σ = {sd.toFixed(2)}</div></div>
         <Op>→</Op>
-        <div><Bars v={norm} w={260} h={80} /><div style={{ fontFamily: mono, fontSize: 11, color: T.accent }}>μ = 0  σ = 1  (then ×γ + β)</div></div>
+        <div><Bars v={norm} w={260} h={80} /><div style={{ fontFamily: mono, fontSize: 14, color: T.accent }}>μ = 0  σ = 1  (then ×γ + β)</div></div>
       </Row>
-      <svg width={520} height={40}><Tex x={0} y={4} size={16} color={T.ink} tex={"\\mathrm{LN}(x)=\\gamma\\odot\\frac{x-\\mu}{\\sqrt{\\sigma^2+\\epsilon}}+\\beta"} /></svg>
-      <div style={{ fontFamily: mono, fontSize: 12, color: T.soft }}>each of the {d.Tn} tokens is normalised on its own; shape unchanged [B, {d.Tn}, {d.D}]</div>
+      <svg width={520} height={40}><Tex x={0} y={4} size={19} color={T.ink} tex={"\\mathrm{LN}(x)=\\gamma\\odot\\frac{x-\\mu}{\\sqrt{\\sigma^2+\\epsilon}}+\\beta"} /></svg>
+      <div style={{ fontFamily: mono, fontSize: 15, color: T.soft }}>each token on its own · shape unchanged</div>
     </div>
   );
 }
@@ -335,8 +350,8 @@ function QKVDetail({ d }) {
       </Row>
       <Label>split D = {d.D} into h = {d.h} heads of d = {d.dh}</Label>
       <Row>
-        {["Q", "K", "V"].map((n, i) => <Mat shape="B h T d" key={n} name={`${n} heads`} rows={d.Tn} cols={d.D} cl={`${d.h} × ${d.dh}`} stripes={d.h} color={["#8DB4FF", "#FFB86B", "#9BE564"][i]} />)}
-        <div style={{ fontFamily: mono, fontSize: 12, color: T.soft, maxWidth: 220, lineHeight: 1.5 }}>reshape + permute:<br /><b style={{ color: T.ink }}>[B, {d.Tn}, {d.D}] → [B, {d.h}, {d.Tn}, {d.dh}]</b><br />every head runs attention on its own {d.dh}-dim slice</div>
+        {["Q", "K", "V"].map((n, i) => <Mat shape="B T D" key={n} name={`${n} heads`} rows={d.Tn} cols={d.D} cl={`D = ${d.h} heads × ${d.dh}`} stripes={d.h} color={["#8DB4FF", "#FFB86B", "#9BE564"][i]} />)}
+        <div style={{ fontFamily: mono, fontSize: 15, color: T.soft, maxWidth: 220, lineHeight: 1.5 }}><b style={{ color: T.ink }}>[B, {d.Tn}, {d.D}] → [B, {d.h}, {d.Tn}, {d.dh}]</b><br />{d.h} heads, {d.dh} dims each</div>
       </Row>
     </div>
   );
@@ -349,27 +364,27 @@ function AttnDetail({ d, img, stats, head, setHead }) {
     <div style={{ display: "grid", gap: 12 }}>
       <Row gap={6}>
         {HEADS.map((h) => (
-          <button key={h.id} onClick={() => setHead(h.id)} style={{ fontFamily: mono, fontSize: 11, padding: "4px 9px", borderRadius: 6, cursor: "pointer", border: `1px solid ${h.id === head ? T.accent2 : T.rule}`, background: h.id === head ? `${T.accent2}22` : T.well, color: h.id === head ? T.accent2 : T.soft }}>{h.label}</button>
+          <button key={h.id} onClick={() => setHead(h.id)} style={{ fontFamily: mono, fontSize: 14, padding: "4px 9px", borderRadius: 6, cursor: "pointer", border: `1px solid ${h.id === head ? T.accent2 : T.rule}`, background: h.id === head ? `${T.accent2}22` : T.well, color: h.id === head ? T.accent2 : T.soft }}>{h.label}</button>
         ))}
-        <span style={{ fontFamily: mono, fontSize: 10.5, color: T.dim }}>toy heads on real pixels · {HEADS.find((h) => h.id === head).hint}</span>
+        <span style={{ fontFamily: mono, fontSize: 13, color: T.dim }}>toy heads on real pixels · {HEADS.find((h) => h.id === head).hint}</span>
       </Row>
-      <Row align="start" gap={18} style={{ alignItems: "flex-start" }}>
+      <Row gap={14} wrap={false} style={{ alignItems: "flex-start" }}>
         <div style={{ display: "grid", gap: 6 }}>
-          <Label>A = softmax(QKᵀ/√d) · [{d.Tn} × {d.Tn}]</Label>
-          <Heatmap A={A} n={d.Tn} size={250} mark={0} />
-          <span style={{ fontFamily: mono, fontSize: 10.5, color: T.dim }}>row = query token · col = key token · top row = CLS</span>
+          <Label>A · [{d.Tn} × {d.Tn}]</Label>
+          <Heatmap A={A} n={d.Tn} size={210} mark={0} />
+          <span style={{ fontFamily: mono, fontSize: 13, color: T.dim }}>row = query token · col = key token · top row = CLS</span>
         </div>
         <div style={{ display: "grid", gap: 6 }}>
           <Label color={T.accent}>CLS row on the image</Label>
-          <PatchImage img={img} P={d.P} size={190} grid={0.3} overlay={cls} />
-          <div style={{ display: "grid", gap: 3, fontFamily: mono, fontSize: 12, marginTop: 4 }}>
+          <PatchImage img={img} P={d.P} size={170} grid={0.3} overlay={cls} />
+          <div style={{ display: "grid", gap: 3, fontFamily: mono, fontSize: 15, marginTop: 4 }}>
             <span style={{ color: T.soft }}>per head: <b style={{ color: T.ink }}>{fmtInt(d.attnEntries)}</b> scores</span>
             <span style={{ color: T.soft }}>× {d.h} heads = <b style={{ color: d.attnEntries > 1e5 ? T.bad : T.ink }}>{fmtN(d.attnEntries * d.h)}</b></span>
-            <span style={{ color: T.dim, fontSize: 10.5 }}>grows as T² ∝ (H/P)⁴</span>
+            <span style={{ color: T.dim, fontSize: 13 }}>grows as T² ∝ (H/P)⁴</span>
           </div>
         </div>
       </Row>
-      <svg width={520} height={40}><Tex x={0} y={4} size={16} color={T.ink} tex={`A_h=\\mathrm{softmax}\\!\\left(\\frac{Q_h K_h^{\\top}}{\\sqrt{${d.dh}}}\\right)\\in\\mathbb{R}^{${d.Tn}\\times ${d.Tn}}`} /></svg>
+      <svg width={520} height={40}><Tex x={0} y={4} size={19} color={T.ink} tex={`A_h=\\mathrm{softmax}\\!\\left(\\frac{Q_h K_h^{\\top}}{\\sqrt{${d.dh}}}\\right)\\in\\mathbb{R}^{${d.Tn}\\times ${d.Tn}}`} /></svg>
     </div>
   );
 }
@@ -394,7 +409,7 @@ function MixDetail({ d }) {
         <Op color={T.wire}>+ x</Op>
         <Mat shape="B T D" name="x" rows={d.Tn} cols={d.D} color={T.wire} glow />
       </Row>
-      <div style={{ fontFamily: mono, fontSize: 12, color: T.soft }}>each token is now a weighted average of every token's value · the residual keeps the original signal</div>
+      <div style={{ fontFamily: mono, fontSize: 15, color: T.soft }}>each token = weighted mix of all tokens</div>
     </div>
   );
 }
@@ -407,16 +422,16 @@ function MLPDetail({ d }) {
         <polygon points={`20,${(h2 - h1) / 2 + 10} 170,10 170,${h2 + 10} 20,${(h2 + h1) / 2 + 10}`} fill={`${T.accent2}22`} stroke={T.accent2} />
         <polygon points={`210,10 360,${(h2 - h1) / 2 + 10} 360,${(h2 + h1) / 2 + 10} 210,${h2 + 10}`} fill={`${T.accent2}22`} stroke={T.accent2} />
         <rect x={174} y={10} width={32} height={h2} rx={4} fill={`${T.wire}33`} stroke={T.wire} />
-        <text x={190} y={h2 / 2 + 14} textAnchor="middle" fontFamily={mono} fontSize={10} fill={T.wire} transform={`rotate(-90 190 ${h2 / 2 + 10})`}>GELU</text>
-        <text x={95} y={h2 / 2 + 14} textAnchor="middle" fontFamily={mono} fontSize={12} fill={T.accent2} fontWeight={700}>W_1</text>
-        <text x={285} y={h2 / 2 + 14} textAnchor="middle" fontFamily={mono} fontSize={12} fill={T.accent2} fontWeight={700}>W_2</text>
-        <text x={20} y={h2 + 34} fontFamily={mono} fontSize={11} fill={T.soft}>D = {d.D}</text>
-        <text x={190} y={h2 + 34} textAnchor="middle" fontFamily={mono} fontSize={11} fill={T.wire}>4D = {d.M}</text>
-        <text x={360} y={h2 + 34} textAnchor="end" fontFamily={mono} fontSize={11} fill={T.soft}>D = {d.D}</text>
-        <text x={400} y={h2 / 2 + 14} fontFamily={mono} fontSize={16} fill={T.wire}>+ x</text>
+        <text x={190} y={h2 / 2 + 14} textAnchor="middle" fontFamily={mono} fontSize={13} fill={T.wire} transform={`rotate(-90 190 ${h2 / 2 + 10})`}>GELU</text>
+        <text x={95} y={h2 / 2 + 14} textAnchor="middle" fontFamily={mono} fontSize={15} fill={T.accent2} fontWeight={700}>W_1</text>
+        <text x={285} y={h2 / 2 + 14} textAnchor="middle" fontFamily={mono} fontSize={15} fill={T.accent2} fontWeight={700}>W_2</text>
+        <text x={20} y={h2 + 34} fontFamily={mono} fontSize={14} fill={T.soft}>D = {d.D}</text>
+        <text x={190} y={h2 + 34} textAnchor="middle" fontFamily={mono} fontSize={14} fill={T.wire}>4D = {d.M}</text>
+        <text x={360} y={h2 + 34} textAnchor="end" fontFamily={mono} fontSize={14} fill={T.soft}>D = {d.D}</text>
+        <text x={400} y={h2 / 2 + 14} fontFamily={mono} fontSize={19} fill={T.wire}>+ x</text>
       </svg>
-      <div style={{ fontFamily: mono, fontSize: 12, color: T.soft, lineHeight: 1.6 }}>
-        applied to each token separately (no mixing between tokens)<br />
+      <div style={{ fontFamily: mono, fontSize: 15, color: T.soft, lineHeight: 1.6 }}>
+        each token separately<br />
         [B, {d.Tn}, {d.D}] → [B, {d.Tn}, {d.M}] → [B, {d.Tn}, {d.D}] · {fmtN(2 * d.D * d.M)} weights, ⅔ of the block
       </div>
     </div>
@@ -432,8 +447,8 @@ function StackDetail({ d, img, stats, head }) {
       <div style={{ display: "grid", gap: 2 }}>
         {Array.from({ length: n }, (_, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ width: 120, height: n > 12 ? 10 : 18, borderRadius: 3, border: `1px solid ${T.accent}88`, background: `${T.accent}${(10 + Math.round((i / n) * 30)).toString(16)}` }} />
-            {(i === 0 || i === n - 1 || i === n / 2) && <span style={{ fontFamily: mono, fontSize: 10, color: T.dim }}>block {i + 1} · [B,{d.Tn},{d.D}]</span>}
+            <div style={{ width: 120, height: n > 12 ? 10 : 18, borderRadius: 3, border: `1px solid ${T.accent}88`, background: `${T.accent}${(10 + Math.round((i / n) * 30)).toString(16).padStart(2, "0")}` }} />
+            {(i === 0 || i === n - 1 || i === n / 2) && <span style={{ fontFamily: mono, fontSize: 13, color: T.dim }}>block {i + 1} · [B,{d.Tn},{d.D}]</span>}
           </div>
         ))}
       </div>
@@ -443,11 +458,11 @@ function StackDetail({ d, img, stats, head }) {
           {rows.map((r, i) => (
             <div key={i} style={{ display: "grid", gap: 4, justifyItems: "center" }}>
               <PatchImage img={img} P={d.P} size={150} grid={0} overlay={r} />
-              <span style={{ fontFamily: mono, fontSize: 10.5, color: T.soft }}>{["early", "middle", "last"][i]} block</span>
+              <span style={{ fontFamily: mono, fontSize: 13, color: T.soft }}>{["early", "middle", "last"][i]} block</span>
             </div>
           ))}
         </Row>
-        <div style={{ fontFamily: mono, fontSize: 12, color: T.soft, lineHeight: 1.6 }}>
+        <div style={{ fontFamily: mono, fontSize: 15, color: T.soft, lineHeight: 1.6 }}>
           {d.L} identical-shape blocks · {fmtN(d.params)} params total<br />
           {(d.macs / 1e9).toFixed(1)} GMACs per image, {(d.attnFrac * 100).toFixed(0)}% of each block in QKᵀ / A·V
         </div>
@@ -459,12 +474,7 @@ function StackDetail({ d, img, stats, head }) {
 // ------------------------------------------------------------ head scenes
 function HeadDetail({ id, d }) {
   const p = useProgress(id, 900);
-  const logits = useMemo(() => {
-    const r = mulberry(11);
-    const v = Array.from({ length: 1000 }, () => (r() - 0.5) * 3);
-    [207, 208, 219, 852, 850].forEach((k, i) => (v[k] = 9 - i * 1.3 - (i ? 0.5 : 0)));
-    return v;
-  }, []);
+  const logits = LOGITS;
   if (id === "clsout") {
     const n = Math.min(d.Tn, 40);
     return (
@@ -474,14 +484,14 @@ function HeadDetail({ id, d }) {
           {Array.from({ length: n }, (_, i) => (
             <div key={i} style={{ width: 12, height: 40, borderRadius: 2, background: i === 0 ? T.accent : T.rule, opacity: i === 0 ? 1 : 1 - 0.8 * ease(p), transition: "opacity .3s" }} />
           ))}
-          {d.Tn > n && <span style={{ fontFamily: mono, fontSize: 11, color: T.dim, alignSelf: "center" }}>… {d.Tn - n} more</span>}
+          {d.Tn > n && <span style={{ fontFamily: mono, fontSize: 14, color: T.dim, alignSelf: "center" }}>… {d.Tn - n} more</span>}
         </div>
         <Row>
           <Mat shape="B T D" name="x" rows={d.Tn} cols={d.D} />
           <Op>x[:, 0]</Op>
           <Mat shape="B D" name="z (CLS)" rows={1} cols={d.D} glow />
         </Row>
-        <div style={{ fontFamily: mono, fontSize: 12, color: T.soft }}>the other {d.N} patch tokens are discarded for classification</div>
+        <div style={{ fontFamily: mono, fontSize: 15, color: T.soft }}>the {d.N} patch tokens are dropped</div>
       </div>
     );
   }
@@ -494,7 +504,7 @@ function HeadDetail({ id, d }) {
         <Mat shape="D K" name="W_head" rows={d.D} cols={d.K} color={T.accent2} />
         <Op>=</Op>
         <div style={{ display: "grid", gap: 4 }}>
-          <Label>logits [1, {d.K}]</Label>
+          <Label>logits [B, {d.K}] · illustrative</Label>
           <Canvas w={300} h={70} deps={[]} draw={(x) => {
             const m = Math.max(...logits);
             logits.forEach((v, i) => { x.fillStyle = i === TRUE_IDX ? T.accent : T.soft; const hh = Math.max(0, (v + 2) / (m + 2)) * 66; x.fillRect((i * 300) / 1000, 70 - hh, 0.6, hh); });
@@ -504,7 +514,7 @@ function HeadDetail({ id, d }) {
       <Label>softmax → top-5 of {d.K} (illustrative)</Label>
       <div style={{ display: "grid", gap: 5, maxWidth: 520 }}>
         {top.map(([name, pr], i) => (
-          <div key={name} style={{ display: "grid", gridTemplateColumns: "170px 1fr 54px", gap: 8, alignItems: "center", fontFamily: mono, fontSize: 12 }}>
+          <div key={name} style={{ display: "grid", gridTemplateColumns: "170px 1fr 54px", gap: 8, alignItems: "center", fontFamily: mono, fontSize: 15 }}>
             <span style={{ color: i === 0 ? T.accent : T.soft }}>{name}</span>
             <div style={{ height: 14, borderRadius: 3, background: T.well }}><div style={{ height: "100%", width: `${pr * 100 * ease(p)}%`, borderRadius: 3, background: i === 0 ? T.accent : T.soft }} /></div>
             <span style={{ color: T.ink, textAlign: "right" }}>{(pr * 100).toFixed(0)}%</span>
@@ -513,9 +523,9 @@ function HeadDetail({ id, d }) {
       </div>
       {id === "loss" && (
         <div style={{ display: "grid", gap: 8, borderTop: `1px solid ${T.rule}`, paddingTop: 12 }}>
-          <svg width={560} height={44}><Tex x={0} y={4} size={17} color={T.ink} tex={`\\mathcal{L}=-\\log p_{y}=-\\log ${top[0][1]}=${(-Math.log(top[0][1])).toFixed(3)}`} /></svg>
-          <div style={{ fontFamily: mono, fontSize: 12, color: T.soft, lineHeight: 1.6 }}>
-            y = {TRUE_IDX} ("golden retriever") · gradients flow back through head → CLS → all {d.L} blocks → W_E<br />
+          <svg width={560} height={44}><Tex x={0} y={4} size={20} color={T.ink} tex={`\\mathcal{L}=-\\log p_{y}=-\\log ${PROBS[TRUE_IDX].toFixed(3)}=${LOSS.toFixed(3)}`} /></svg>
+          <div style={{ fontFamily: mono, fontSize: 15, color: T.soft, lineHeight: 1.6 }}>
+            true class: golden retriever<br />
             random guess: −log(1/{d.K}) = {Math.log(d.K).toFixed(2)}
           </div>
         </div>
@@ -557,28 +567,28 @@ export default function ViTView() {
     { id: "flatten", block: "flatten", caption: "line the patches up, left→right, top→bottom", vars: () => [["N", `${d.N}`], ["P²·3", `${d.pc}`]] },
     { id: "embed", block: "embed", caption: "one shared linear layer turns every patch into a D-dim token", vars: () => [["W_E", `[${d.pc}, ${d.D}]`], ["params", fmtN(d.pc * d.D + d.D)]] },
     { id: "cls", block: "cls", caption: "a learnable [CLS] token goes in front", vars: () => [["T = N+1", `${d.Tn}`]] },
-    { id: "pos", block: "pos", caption: "add a learned position vector to each slot", vars: () => [["E_pos", `[${d.Tn}, ${d.D}]`]] },
+    { id: "pos", block: "pos", caption: "add position row k to slot k · row 0 goes to CLS", vars: () => [["E_pos", `[${d.Tn}, ${d.D}]`]] },
     { id: "ln1", block: "ln1", caption: "normalise each token before attention (pre-norm)", vars: () => [["shape", `[${B},${d.Tn},${d.D}]`]] },
     { id: "qkv", block: "qkv", caption: `project to queries, keys, values, split into ${d.h} heads`, vars: () => [["h", `${d.h}`], ["d = D/h", `${d.dh}`]] },
-    { id: "attn", block: "attn", caption: "every token scores every other token", vars: () => [["T²", fmtInt(d.attnEntries), d.attnEntries > 1e5 ? "bad" : null]] },
+    { id: "attn", block: "attn", caption: "every token scores every token, itself included", vars: () => [["T²", fmtInt(d.attnEntries), d.attnEntries > 1e5 ? "bad" : null]] },
     { id: "mix", block: "mix", caption: "weighted sum of values, heads concatenated, residual add", vars: () => [["out", `[${B},${d.Tn},${d.D}]`]] },
     { id: "mlp", block: "mlp", caption: "per-token MLP widens to 4D and back, residual add", vars: () => [["hidden", `${d.M}`]] },
     { id: "stack", block: "stack", caption: `stack ${d.L} blocks: the shape never changes`, vars: () => [["L", `${d.L}`], ["GMACs", (d.macs / 1e9).toFixed(1)]] },
     { id: "clsout", block: "clsout", caption: "only the CLS token's final state is used", vars: () => [["z", `[${B}, ${d.D}]`]] },
-    { id: "head", block: "head", caption: `a linear layer maps it to ${d.K} class scores`, vars: () => [["W_head", `[${d.D}, ${d.K}]`]] },
-    { id: "loss", block: "loss", caption: "train with cross-entropy on the true label", vars: () => [["loss", (-Math.log(PRED[0][1])).toFixed(3)]] },
+    { id: "head", block: "head", caption: `fine-tuning head: one linear layer → ${d.K} class scores (pre-training used Linear→tanh→Linear)`, vars: () => [["W_head", `[${d.D}, ${d.K}]`]] },
+    { id: "loss", block: "loss", caption: "cross-entropy on the true label", vars: () => [["loss", `${LOSS.toFixed(3)} (illustrative)`]] },
   ];
 
   const G = {
-    B: ["batch size", "B"], C: ["channels (RGB)", 3], H: ["image height", res], W: ["image width", res], P: ["patch side", P],
+    B: ["batch size", "B"], g: ["patches per side H/P", d.g], C: ["channels (RGB)", 3], H: ["image height", res], W: ["image width", res], P: ["patch side", P],
     N: ["patches (H/P)²", d.N], T: ["tokens N+1", d.Tn], "P²C": ["values per patch", d.pc], D: ["hidden width", d.D],
     "3D": ["Q,K,V stacked", 3 * d.D], h: ["heads", d.h], d: ["head width D/h", d.dh], M: ["MLP width 4D", d.M], K: ["classes", d.K],
   };
   const S = (name, dims, what, io, note) => ({ name, dims, what, io, note });
   const tags = (st) => ({
     image: [S("x", ["B", "C", "H", "W"], "batch of RGB images", "out")],
-    patchify: [S("x", ["B", "C", "H", "W"], null, "in"), S("patches", ["B", "N", "P", "P", "C"], `${d.g}×${d.g} grid flattened to N`, "out")],
-    flatten: [S("patches", ["B", "N", "P", "P", "C"], null, "in"), S("patches", ["B", "N", "P²C"], "each patch is one long vector", "out")],
+    patchify: [S("x", ["B", "C", "H", "W"], null, "in"), S("patches", ["B", "g", "g", "P", "P", "C"], null, "out")],
+    flatten: [S("patches", ["B", "g", "g", "P", "P", "C"], null, "in"), S("patches", ["B", "N", "P²C"], "each patch is one long vector", "out")],
     embed: [S("patches", ["B", "N", "P²C"], null, "in"), S("W_E", ["P²C", "D"], "shared by all patches"), S("tokens", ["B", "N", "D"], null, "out")],
     cls: [S("cls_token", ["D"], "learned parameter", "in"), S("x", ["B", "T", "D"], "CLS at index 0", "out")],
     pos: [S("pos_embed", ["T", "D"], "learned, added element-wise", "in"), S("x", ["B", "T", "D"], null, "out")],
@@ -592,22 +602,22 @@ export default function ViTView() {
   const { N, Tn, D, h, dh, M, K, pc, L } = d;
   const matmuls = (st) => {
     const body = {
-      image: <MMNote>no multiplication yet: x is [B, 3, {res}, {res}] = {fmtInt(3 * res * res)} numbers per image</MMNote>,
-      patchify: <MMNote>reshape only: [B, 3, {res}, {res}] → [B, {N}, {P}, {P}, 3] (no arithmetic)</MMNote>,
-      flatten: <MMNote>reshape only: [B, {N}, {P}, {P}, 3] → [B, {N}, {pc}]</MMNote>,
+      image: <MMNote>input [B, 3, {res}, {res}] = {fmtInt(3 * res * res)} numbers</MMNote>,
+      patchify: <MMNote>rearrange: [B, 3, {res}, {res}] → [B, {d.g}, {d.g}, {P}, {P}, 3]</MMNote>,
+      flatten: <MMNote>reshape: [B, {d.g}, {d.g}, {P}, {P}, 3] → [B, {N}, {pc}]</MMNote>,
       embed: <>
-        <MM a={["patches", ["B", N, pc]]} b={["W_E", [pc, D]]} c={["tokens", ["B", N, D]]} note={`+ b_E [${D}] · the same W_E for all ${N} patches`} />
-        <MMNote>Conv2d(3, {D}, kernel={P}, stride={P}) does exactly this matmul</MMNote>
+        <MM a={["patches", ["B", N, pc]]} b={["W_E", [pc, D]]} c={["tokens", ["B", N, D]]} note="same W_E for every patch" />
+        <MMNote>= Conv2d(3, {D}, kernel={P}, stride={P})</MMNote>
       </>,
-      cls: <MMNote>concat, no multiplication: cls [B, 1, {D}] ‖ tokens [B, {N}, {D}] → x [B, {Tn}, {D}]</MMNote>,
-      pos: <MMNote>element-wise add: x [B, {Tn}, {D}] + E_pos [1, {Tn}, {D}] (broadcast over B) → [B, {Tn}, {D}]</MMNote>,
-      ln1: <MMNote>per-token normalise over D: [B, {Tn}, {D}] → [B, {Tn}, {D}], then × γ [{D}] + β [{D}]</MMNote>,
+      cls: <MMNote>concat: cls [B, 1, {D}] ‖ tokens [B, {N}, {D}] → x [B, {Tn}, {D}]</MMNote>,
+      pos: <MMNote>add: x [B, {Tn}, {D}] + E_pos [1, {Tn}, {D}] → [B, {Tn}, {D}]</MMNote>,
+      ln1: <MMNote>normalise: [B, {Tn}, {D}] → [B, {Tn}, {D}], then × γ [{D}] + β [{D}]</MMNote>,
       qkv: <>
         <MM a={["LN(x)", ["B", Tn, D]]} b={["W_qkv", [D, 3 * D]]} c={["qkv", ["B", Tn, 3 * D]]} />
         <MMNote>reshape [B, {Tn}, 3, {h}, {dh}] → permute → q, k, v each [B, {h}, {Tn}, {dh}]</MMNote>
       </>,
       attn: <>
-        <MM a={["q", ["B", h, Tn, dh]]} b={["kᵀ", ["B", h, dh, Tn]]} c={["S", ["B", h, Tn, Tn]]} note={`batched over B and the ${h} heads · ${fmtInt(Tn * Tn)} dot products per head`} />
+        <MM a={["q", ["B", h, Tn, dh]]} b={["kᵀ", ["B", h, dh, Tn]]} c={["S", ["B", h, Tn, Tn]]} note="for every head" />
         <MMNote>A = softmax(S / √{dh}, dim = −1)   [B, {h}, {Tn}, {Tn}], each row sums to 1</MMNote>
       </>,
       mix: <>
@@ -620,7 +630,7 @@ export default function ViTView() {
         <MM a={["h", ["B", Tn, M]]} b={["W_2", [M, D]]} c={["mlp", ["B", Tn, D]]} note="+ b_2, x = x + mlp" />
       </>,
       stack: <BlockMMs B="B" T={Tn} D={D} h={h} d={dh} M={M} L={L} />,
-      clsout: <MMNote>indexing, no multiplication: x[:, 0] of [B, {Tn}, {D}] → z [B, {D}]</MMNote>,
+      clsout: <MMNote>index: x[:, 0] of [B, {Tn}, {D}] → z [B, {D}]</MMNote>,
       head: <MM a={["z", ["B", D]]} b={["W_head", [D, K]]} c={["logits", ["B", K]]} note={`+ b [${K}], then softmax over ${K}`} />,
       loss: <MMNote>pick p[y] from [B, {K}] → −log → mean over B → scalar</MMNote>,
     }[st.id];
@@ -632,15 +642,15 @@ export default function ViTView() {
     <StepShell
       matmuls={matmuls}
       title="Vision Transformer (ViT-B)"
-      subtitle="An Image is Worth 16×16 Words · Dosovitskiy et al. 2020 · numbers in the attention maps are a toy model on the real pixels"
+      subtitle="attention maps, predictions and loss are illustrative (toy model on the real pixels) · shapes, params and MACs are exact"
       blocks={FLOW}
       steps={steps}
       scene={(st) => <VitScene st={st} img={img} d={d} stats={stats} head={head} setHead={setHead} />}
       tags={tags}
       controls={
         <Row gap={18}>
-          <Seg label="PATCH SIZE P" value={P} options={[8, 14, 16, 32]} onChange={setP} />
-          <Seg label="RESOLUTION" value={res} options={[224, 384]} onChange={setRes} />
+          <Seg label="PATCH SIZE P" value={P} options={[8, 14, 16, 32]} onChange={setP} disabled={res % 14 ? [14] : []} hint="384 / 14 is not a whole number of patches" />
+          <Seg label="RESOLUTION" value={res} options={[224, 384]} onChange={(r) => { setRes(r); if (r % P) setP(16); }} />
           <Stat k="tokens T" v={fmtInt(d.Tn)} tone={T.accent} />
           <Stat k="attn scores / head" v={fmtInt(d.attnEntries)} tone={d.attnEntries > 1e5 ? T.bad : T.ink} />
           <Stat k="params" v={fmtN(d.params)} />

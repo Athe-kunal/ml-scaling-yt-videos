@@ -26,7 +26,7 @@ export function CodeLine({ n, text }) {
           {code}
         </div>
       )}
-      {com && <div style={{ ...wrap, paddingLeft: pad + (code ? 12 : 0), color: tone, fontSize: 10.5 }}>{com}</div>}
+      {com && <div style={{ ...wrap, paddingLeft: pad + (code ? 12 : 0), color: tone, fontSize: 13 }}>{com}</div>}
     </div>
   );
 }

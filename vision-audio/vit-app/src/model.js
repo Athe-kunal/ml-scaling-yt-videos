@@ -105,7 +105,7 @@ function scorer(head, feats, g, depth) {
     const a = feats[i - 1];
     if (head === "local") return -((a.row - b.row) ** 2 + (a.col - b.col) ** 2) / (2 * sig * sig);
     if (head === "color") return -((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2) * 18;
-    if (head === "object") return b.sal * (3 + depth * 5) - (a.sal < 0.3 ? 0 : 0.5);
+    if (head === "object") return b.sal * (3 + depth * 5);
     return noise[j] * 0.6;
   };
 }
@@ -167,9 +167,7 @@ export function clipToy(n, train, d = 1024) {
   const noise = Array.from({ length: SUBJECTS.length }, () => unit(Array.from({ length: d }, gauss)));
   const a = 0.003 + 0.16 * train ** 1.6;
   const img = txt.map((t, i) => unit(t.map((x, k) => a * x + (1 - a) * noise[i][k])));
-  // raw (pre-normalisation) norms, just for the normalise step picture
-  const rawNorm = (i, kind) => 6 + 9 * mulberry(i * 31 + (kind === "img" ? 3 : 5))();
-  const scale = Math.exp(Math.log(1 / 0.07) + train * (Math.log(100) - Math.log(1 / 0.07)));
+  const scale = Math.exp(Math.log(1 / 0.07) + train ** 2 * (Math.log(100) - Math.log(1 / 0.07))); // reaches the 100 cap at train = 1
   const I = img.slice(0, n), Tt = txt.slice(0, n);
   const cos = I.map((u) => Tt.map((v) => dot(u, v)));
   const logits = cos.map((row) => row.map((x) => x * scale));
@@ -180,8 +178,49 @@ export function clipToy(n, train, d = 1024) {
   const lossCol = colsT.map((p, j) => -Math.log(p[j]));
   const mean = (v) => v.reduce((p, q) => p + q, 0) / v.length;
   const li = mean(lossRow), lt = mean(lossCol);
-  return { img: I, txt: Tt, allTxt: txt, allImg: img, cos, logits, scale, pRow, pCol: colsT, lossRow, lossCol, li, lt, loss: (li + lt) / 2, rawNorm, d, sm, dot };
+  return { img: I, txt: Tt, allTxt: txt, allImg: img, cos, logits, scale, pRow, pCol: colsT, lossRow, lossCol, li, lt, loss: (li + lt) / 2, d, sm, dot };
 }
 
 export const fmtN = (x) => (x >= 1e9 ? `${(x / 1e9).toFixed(1)}B` : x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${(x / 1e3).toFixed(1)}K` : `${x}`);
 export const fmtInt = (x) => x.toLocaleString("en-US");
+
+// ---------- SigLIP ----------
+// both towers have the same width; the image tower has no CLS (MAP head instead),
+// text context is 64 SentencePiece tokens, vocab 32,000
+export const SIGLIP_MODELS = {
+  "B/16": { name: "SigLIP B/16 @224", res: 224, P: 16, D: 768, L: 12, h: 12, M: 3072 },
+  "So400m/14": { name: "SigLIP So400m/14 @384", res: 384, P: 14, D: 1152, L: 27, h: 16, M: 4304 },
+};
+export const S_CTX = 64, S_VOCAB = 32000;
+
+// the toy for SigLIP: the trained cosines of the CLIP toy, with toy t and b.
+// cell loss ℓ_ij = −log σ(z_ij · L_ij), z = +1 on the diagonal, −1 elsewhere
+export const sigmoid = (x) => 1 / (1 + Math.exp(-x));
+export function sigToy(n, t = 30, b = -4) {
+  const base = clipToy(n, 1);
+  const cos = base.cos;
+  const logits = cos.map((r) => r.map((c) => t * c + b));
+  const z = logits.map((r, i) => r.map((_, j) => (i === j ? 1 : -1)));
+  const p = logits.map((r) => r.map(sigmoid)); // σ(L) = P(match)
+  const ell = logits.map((r, i) => r.map((l, j) => -Math.log(sigmoid(z[i][j] * l))));
+  const rowSum = ell.map((r) => r.reduce((a, c) => a + c, 0));
+  const pos = ell.reduce((a, r, i) => a + r[i], 0);
+  const total = rowSum.reduce((a, c) => a + c, 0);
+  return { n, t, b, cos, logits, z, p, ell, rowSum, pos, neg: total - pos, total, loss: total / n, allImg: base.allImg, allTxt: base.allTxt, dot: base.dot };
+}
+
+// ---------- SigLIP 2 NaFlex ----------
+// HF Siglip2ImageProcessor.get_image_size_for_max_num_patches: binary-search the
+// largest scale whose (ceil(h·s/p)·p) × (ceil(w·s/p)·p) grid fits the token budget.
+// Aspect ratio is kept (up to rounding to multiples of p).
+export function naflexSize(h, w, p = 16, maxPatches = 256, eps = 1e-5) {
+  const sz = (s, x) => Math.max(p, Math.ceil((x * s) / p) * p);
+  let lo = eps / 10, hi = 100;
+  while (hi - lo >= eps) {
+    const s = (lo + hi) / 2;
+    if ((sz(s, h) / p) * (sz(s, w) / p) <= maxPatches) lo = s; else hi = s;
+  }
+  const H = sz(lo, h), W = sz(lo, w);
+  return { H, W, gh: H / p, gw: W / p, N: (H / p) * (W / p) };
+}
+export const NAFLEX_BUDGETS = [128, 256, 576, 784, 1024];
