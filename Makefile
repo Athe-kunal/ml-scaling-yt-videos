@@ -56,3 +56,21 @@ moe-install:
 
 moe:
 	cd $(MOE_DIR) && npm run dev -- --port $(MOE_PORT)
+
+.PHONY: vit vit-install
+VIT_DIR := vision-audio/vit-app
+VIT_PORT ?= 5183
+
+vit-install:
+	cd $(VIT_DIR) && npm install
+
+vit:
+	cd $(VIT_DIR) && npm run dev -- --port $(VIT_PORT)
+
+# Bombadil property-based UI fuzzing (start `make vit` in another terminal first)
+vit-fuzz:
+	cd $(VIT_DIR) && npx bombadil browser test http://localhost:$(VIT_PORT) bombadil/spec.ts \
+		--time-limit=$(or $(T),3m) --output-path bombadil-out --output-path-overwrite
+
+vit-inspect:
+	cd $(VIT_DIR) && npx bombadil browser inspect bombadil-out
