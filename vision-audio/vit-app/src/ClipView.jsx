@@ -27,7 +27,8 @@ const CODE = {
   txt_tf: ["x = transformer(x, mask=causal)   # [n, 77, Dt]", "x = ln_final(x)", "T_f = x[arange(n), T.argmax(-1)]   # <eot> has the highest id → [n, Dt]"],
   project: ["I_e = I_f @ W_i   # I_f = ln_post(CLS out) [n,Di]·[Di,E] → [n,E]", "T_e = T_f @ W_t   # T_f = ln_final(<eot> out) [n,Dt]·[Dt,E] → [n,E]"],
   normalize: ["I_e = I_e / I_e.norm(dim=-1, keepdim=True)", "T_e = T_e / T_e.norm(dim=-1, keepdim=True)   # unit length"],
-  logits: ["logits = exp(t) * I_e @ T_e.T   # [n,E]·[E,n] → [n,n]", "# t learned, init log(1/0.07), exp(t) clipped at 100"],
+  cos: ["cos = I_e @ T_e.T   # unit rows → [n,E]·[E,n] → [n,n], every value in [−1, 1]"],
+  scale: ["logit_scale = nn.Parameter(log(1 / 0.07))   # t, learned, init e^t = 14.3", "logits = logit_scale.exp() * cos   # scalar × [n,n]", "logit_scale.data.clamp_(0, log(100))   # e^t ≤ 100"],
   loss_i: ["labels = arange(n)   # the right answer is the diagonal", "loss_i = cross_entropy(logits, labels)   # each row: image → caption"],
   loss_t: ["loss_t = cross_entropy(logits.T, labels)   # each column: caption → image"],
   loss: ["loss = (loss_i + loss_t) / 2"],
@@ -62,7 +63,8 @@ const FLOW = [
     items: [
       { id: "project", label: "linear projections", sub: "CLS → I_e · <eot> → T_e", code: CODE.project },
       { id: "normalize", label: "L2 normalise", sub: "unit vectors", code: CODE.normalize },
-      { id: "logits", label: "similarity logits", sub: "[n, n] × exp(t)", code: CODE.logits },
+      { id: "cos", label: "cosine similarities", sub: "[n, n] · in [−1, 1]", code: CODE.cos },
+      { id: "scale", label: "× logit scale e^t", sub: "sharpen the softmax", code: CODE.scale },
     ],
   },
   {
@@ -591,8 +593,9 @@ const fmtE = (x) => (x >= 1e4 ? x.toExponential(1) : x >= 100 ? x.toFixed(0) : x
 function SimMatrix({ n, toy, mode, sel, setSel }) {
   const row = mode === "row", col = mode === "col", loss = row || col;
   const cell = n > 6 ? 46 : 54, k = sel;
-  const lo = Math.min(...toy.logits.flat()), hi = Math.max(...toy.logits.flat());
-  const shade = (i, j) => (toy.logits[i][j] - lo) / (hi - lo || 1);
+  const M = mode === "cos" ? toy.cos : toy.logits;
+  const lo = Math.min(...M.flat()), hi = Math.max(...M.flat());
+  const shade = (i, j) => (M[i][j] - lo) / (hi - lo || 1);
   const idx = Array.from({ length: n }, (_, j) => j);
   // the selected line's arithmetic
   const L = row ? toy.logits[k] : toy.logits.map((r) => r[k]);
@@ -603,7 +606,7 @@ function SimMatrix({ n, toy, mode, sel, setSel }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: `52px repeat(${n}, ${cell}px)${extraCols}`, gap: 3, alignItems: "center" }}>
       {/* header */}
-      <span style={{ fontFamily: mono, fontSize: 12, color: T.dim }}>logits L</span>
+      <span style={{ fontFamily: mono, fontSize: 12, color: T.dim }}>{mode === "cos" ? "cos" : "logits L"}</span>
       {idx.map((j) => (
         <span key={j} onClick={() => col && setSel(j)} style={{ fontFamily: mono, fontSize: 13, color: PAIR_COL[j], textAlign: "center", overflow: "hidden", cursor: col ? "pointer" : "default", opacity: col && j !== k ? 0.5 : 1 }}>T{j} {SUBJECTS[j].id}</span>
       ))}
@@ -619,7 +622,7 @@ function SimMatrix({ n, toy, mode, sel, setSel }) {
               height: cell - 14, borderRadius: 4, display: "grid", placeItems: "center", fontFamily: mono, fontSize: 15, fontWeight: i === j ? 700 : 400,
               background: heatCss(shade(i, j)), color: shade(i, j) > 0.45 ? T.bg : T.soft, cursor: loss ? "pointer" : "default",
               outline: i === j ? `2px solid ${C}` : "none", outlineOffset: -2, opacity: picked ? 1 : 0.3, transition: "opacity .3s",
-            }}>{toy.logits[i][j].toFixed(1)}</div>
+            }}>{M[i][j].toFixed(mode === "cos" ? 2 : 1)}</div>
           );
         }),
         row && <span key={`l${i}`} style={small("", W, i === k)}>{toy.lossRow[i].toFixed(2)}</span>,
@@ -685,17 +688,97 @@ function MatrixScene({ n, toy, mode }) {
   return (
     <Row gap={22} wrap={false} style={{ alignItems: "flex-start", padding: 6, overflowX: "auto" }}>
       <SimMatrix n={n} toy={toy} mode={mode} sel={k} setSel={setSel} />
-      <div style={{ display: "grid", gap: 10, maxWidth: mode === "logits" ? 300 : 440, minWidth: 0 }}>
-        {mode === "logits" && <>
-          <svg width={300} height={40}><Tex x={0} y={4} size={19} color={T.ink} tex={"L_{ij}=e^{t}\\,\\hat{I}_i\\cdot\\hat{T}_j"} /></svg>
-          <span style={{ fontFamily: mono, fontSize: 15, color: T.soft, lineHeight: 1.6 }}>e^t = <b style={{ color: T.wire }}>{toy.scale.toFixed(1)}</b> learned temperature</span>
-          <span style={{ fontFamily: mono, fontSize: 15, color: T.soft, lineHeight: 1.6, borderLeft: `2px solid ${T.wire}`, paddingLeft: 8 }}>
-            capped at <b style={{ color: T.wire }}>100</b>
-          </span>
+      <div style={{ display: "grid", gap: 10, maxWidth: mode === "cos" ? 300 : 440, minWidth: 0 }}>
+        {mode === "cos" && <>
+          <svg width={300} height={40}><Tex x={0} y={4} size={19} color={T.ink} tex={"\\cos_{ij}=\\hat{I}_i\\cdot\\hat{T}_j"} /></svg>
+          <span style={{ fontFamily: mono, fontSize: 15, color: T.soft, lineHeight: 1.6 }}>every value in <b style={{ color: T.wire }}>[−1, 1]</b></span>
           <span style={{ fontFamily: mono, fontSize: 15, color: T.soft, lineHeight: 1.6 }}>diagonal = {n} true pairs</span>
         </>}
         {mode === "row" && <WorkedCE n={n} toy={toy} mode="row" k={k} />}
         {mode === "col" && <WorkedCE n={n} toy={toy} mode="col" k={k} />}
+      </div>
+    </Row>
+  );
+}
+
+// Why e^t exists: cosines live in [−1, 1], so without a scale the softmax over a row
+// is almost flat (p ≈ 1/n) no matter how good the embeddings are. Same toy cosines as
+// the previous step; drag e^t and watch the row's softmax and its loss.
+const softmax = (v) => { const m = Math.max(...v), e = v.map((x) => Math.exp(x - m)), z = e.reduce((a, b) => a + b, 0); return e.map((x) => x / z); };
+function ScaleScene({ n, toy }) {
+  const [sel, setSel] = useState(0);
+  const [sv, setSv] = useState(null);
+  const k = Math.min(sel, n - 1), s = sv ?? toy.scale;
+  const cos = toy.cos[k], L = cos.map((c) => s * c), P = softmax(L);
+  const rowLoss = (x) => -Math.log(softmax(cos.map((c) => x * c))[k]);
+  const best = (x) => -Math.log(Math.exp(x) / (Math.exp(x) + n - 1)); // cos 1 on the diagonal, 0 elsewhere
+  const idx = Array.from({ length: n }, (_, j) => j), C = T.accent, W = T.wire;
+  const cell = 58, barH = 70;
+  const cellTxt = (j, color = T.soft) => ({ fontFamily: mono, fontSize: 15, textAlign: "center", color: j === k ? C : color, fontWeight: j === k ? 700 : 400 });
+  // loss-vs-scale plot, log x from 1 to 100
+  const GW = 380, GH = 230, x0 = 46, x1 = GW - 16, y0 = 16, y1 = GH - 34, ymax = Math.log(n) * 1.12;
+  const X = (x) => x0 + (Math.log(x) / Math.log(100)) * (x1 - x0), Y = (v) => y0 + (1 - Math.min(v, ymax) / ymax) * (y1 - y0);
+  const xs = Array.from({ length: 81 }, (_, i) => Math.exp((i / 80) * Math.log(100)));
+  const marks = [[1, "1"], [1 / 0.07, "14.3 init"], [100, "100 cap"]];
+  return (
+    <Row gap={30} style={{ alignItems: "flex-start", padding: 6 }}>
+      <div style={{ display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <Label>image</Label>
+          {idx.map((i) => <div key={i} onClick={() => setSel(i)} style={{ cursor: "pointer", opacity: i === k ? 1 : 0.4 }}><Thumb i={i} size={30} /></div>)}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: `64px repeat(${n}, ${cell}px)`, gap: 4, alignItems: "end" }}>
+          <span />
+          {idx.map((j) => <span key={j} style={{ ...cellTxt(j, PAIR_COL[j]), color: PAIR_COL[j], fontSize: 13, whiteSpace: "nowrap" }}>{SUBJECTS[j].id}</span>)}
+          <span style={{ fontFamily: mono, fontSize: 14, color: T.dim }}>cos</span>
+          {idx.map((j) => <span key={j} style={cellTxt(j)}>{cos[j].toFixed(2)}</span>)}
+          <span style={{ fontFamily: mono, fontSize: 14, color: W }}>× {s.toFixed(1)}</span>
+          {idx.map((j) => <span key={j} style={cellTxt(j, T.ink)}>{L[j].toFixed(s < 10 ? 2 : 1)}</span>)}
+          <span style={{ fontFamily: mono, fontSize: 14, color: T.dim, alignSelf: "center" }}>softmax</span>
+          {idx.map((j) => (
+            <div key={j} style={{ height: barH, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", gap: 3 }}>
+              <span style={{ fontFamily: mono, fontSize: 13, color: j === k ? C : T.dim }}>{P[j].toFixed(2)}</span>
+              <div style={{ width: 30, height: Math.max(2, P[j] * (barH - 20)), borderRadius: 3, background: j === k ? C : T.soft, transition: "height .25s" }} />
+            </div>
+          ))}
+        </div>
+        <label style={{ display: "grid", gap: 6, maxWidth: 64 + n * (cell + 4) }}>
+          <span style={{ fontFamily: mono, fontSize: 15, color: T.soft, display: "flex", justifyContent: "space-between" }}>
+            <span>e^t = <b style={{ color: W }}>{s.toFixed(1)}</b></span>
+            <span>−log p = <b style={{ color: C }}>{rowLoss(s).toFixed(2)}</b></span>
+          </span>
+          <input type="range" min={0} max={1} step={0.005} value={Math.log(s) / Math.log(100)} onChange={(e) => setSv(Math.exp(+e.target.value * Math.log(100)))} style={{ accentColor: W }} />
+          <span style={{ display: "flex", gap: 8 }}>
+            {[[1, "no scale"], [1 / 0.07, "init"], [toy.scale, "trained"], [100, "cap"]].map(([v, lab]) => (
+              <button key={lab} onClick={() => setSv(v)} style={{ ...btn(Math.abs(s - v) < 0.05), fontSize: 13 }}>{lab} {v.toFixed(v < 10 ? 0 : 1)}</button>
+            ))}
+          </span>
+        </label>
+      </div>
+      <div style={{ display: "grid", gap: 8 }}>
+        <svg width={GW} height={GH} style={{ background: T.well, borderRadius: 8 }}>
+          <line x1={x0} x2={x1} y1={Y(Math.log(n))} y2={Y(Math.log(n))} stroke={T.bad} strokeDasharray="4 4" />
+          <text x={x1} y={Y(Math.log(n)) - 6} textAnchor="end" fontFamily={mono} fontSize={13} fill={T.bad}>flat = ln {n} = {Math.log(n).toFixed(2)}</text>
+          <polyline points={xs.map((x) => `${X(x)},${Y(best(x))}`).join(" ")} fill="none" stroke={T.soft} strokeWidth={1.5} strokeDasharray="5 4" />
+          <polyline points={xs.map((x) => `${X(x)},${Y(rowLoss(x))}`).join(" ")} fill="none" stroke={C} strokeWidth={2.5} />
+          {marks.map(([v, lab]) => (
+            <g key={lab}>
+              <line x1={X(v)} x2={X(v)} y1={y1} y2={y1 + 5} stroke={T.dim} />
+              <text x={X(v)} y={y1 + 20} textAnchor={v === 1 ? "start" : v === 100 ? "end" : "middle"} fontFamily={mono} fontSize={13} fill={T.dim}>{lab}</text>
+            </g>
+          ))}
+          <line x1={X(s)} x2={X(s)} y1={y0} y2={y1} stroke={W} strokeOpacity={0.4} />
+          <circle cx={X(s)} cy={Y(rowLoss(s))} r={6} fill={W} />
+          <text x={x0 - 8} y={y0 + 10} textAnchor="end" fontFamily={mono} fontSize={13} fill={T.dim}>loss</text>
+          <text x={x0 - 8} y={y1} textAnchor="end" fontFamily={mono} fontSize={13} fill={T.dim}>0</text>
+        </svg>
+        <div style={{ display: "grid", gap: 4, fontFamily: mono, fontSize: 14 }}>
+          <span style={{ color: C }}>━ this row's loss</span>
+          <span style={{ color: T.soft }}>╌ perfect pair (cos 1 vs 0)</span>
+        </div>
+        <span style={{ fontFamily: mono, fontSize: 15, color: T.soft, lineHeight: 1.6 }}>
+          e^t = 1 → perfect pair still <b style={{ color: T.bad }}>{best(1).toFixed(2)}</b>
+        </span>
       </div>
     </Row>
   );
@@ -780,7 +863,8 @@ export default function ClipView() {
     { id: "txt_tf", block: "txt_tf", caption: "causal text transformer, then keep the <eot> token", vars: () => [["Lt", `${m.Lt}`], ["heads", `${m.ht}`]] },
     { id: "project", block: "project", caption: `project both into the shared E = ${m.E} space`, vars: () => [["W_i", `[${m.Di}, ${m.E}]`], ["W_t", `[${m.Dt}, ${m.E}]`]] },
     { id: "normalize", block: "normalize", caption: "L2-normalise: every embedding on the unit sphere", vars: () => [["‖·‖", "1"]] },
-    { id: "logits", block: "logits", caption: "all n² image-text cosines, scaled by a learned temperature", vars: () => [["exp(t)", toy.scale.toFixed(1)]] },
+    { id: "cos", block: "cos", caption: "all n² image–caption cosines", vars: () => [["range", "[−1, 1]"]] },
+    { id: "scale", block: "scale", caption: "multiply by e^t: cosines are too flat for softmax", vars: () => [["e^t", toy.scale.toFixed(1)], ["init", "14.3"], ["cap", "100"]] },
     { id: "loss_i", block: "loss_i", caption: "rows: each image must pick its own caption", vars: () => [["loss_i", toy.li.toFixed(3)]] },
     { id: "loss_t", block: "loss_t", caption: "columns: each caption must pick its own image", vars: () => [["loss_t", toy.lt.toFixed(3)]] },
     { id: "loss", block: "loss", caption: "the CLIP loss is the average of both directions", vars: () => [["loss", toy.loss.toFixed(3)], ["ln n", Math.log(n).toFixed(2)]] },
@@ -796,7 +880,8 @@ export default function ClipView() {
     batch: [S("I", ["n", "C", "H", "W"], "images", "in"), S("captions", ["n"], "strings", "in")],
     tok_ids: [S("T", ["n", "L"], "integer ids: 49406 <sot> … 49407 <eot>, then 0 padding", "out")],
     normalize: [S("I_e, T_e", ["n", "E"], null, "in"), S("Î_e, T̂_e", ["n", "E"], "unit rows", "out")],
-    logits: [S("logits", ["n", "n"], "row = image, column = caption", "out", `e^t = ${toy.scale.toFixed(1)}`)],
+    cos: [S("cos", ["n", "n"], "row = image, column = caption", "out")],
+    scale: [S("cos", ["n", "n"], null, "in"), S("logits", ["n", "n"], "e^t · cos", "out", `e^t = ${toy.scale.toFixed(1)}`)],
     loss_i: [S("softmax(logits, dim=1)", ["n", "n"]), S("loss_i", [], "mean −log of the diagonal", "out")],
     loss_t: [S("softmax(logits, dim=0)", ["n", "n"]), S("loss_t", [], "mean −log of the diagonal", "out")],
     loss: [S("loss", [], "(loss_i + loss_t) / 2", "out")],
@@ -819,7 +904,8 @@ export default function ClipView() {
       txt_tf: <TxtTf n={n} m={m} tk={tk} />,
       project: <Project n={n} m={m} />,
       normalize: <Normalize m={m} />,
-      logits: <MatrixScene n={n} toy={toy} mode="logits" />,
+      cos: <MatrixScene n={n} toy={toy} mode="cos" />,
+      scale: <ScaleScene n={n} toy={toy} />,
       loss_i: <MatrixScene n={n} toy={toy} mode="row" />,
       loss_t: <MatrixScene n={n} toy={toy} mode="col" />,
       loss: <LossScene n={n} toy={toy} train={train} />,
@@ -861,10 +947,8 @@ export default function ClipView() {
         <MM a={["T_f", [n, Dt]]} b={["W_t", [Dt, E]]} c={["T_e", [n, E]]} />
       </>,
       normalize: <MMNote>row-wise: I_e [{n}, {E}] ÷ ‖I_e‖ [{n}, 1] → [{n}, {E}] · same for T_e</MMNote>,
-      logits: <>
-        <MM a={["I_e", [n, E]]} b={["T_eᵀ", [E, n]]} c={["cos", [n, n]]} note="cosine of every image–caption pair" />
-        <MMNote>logits = e^t · cos, e^t = {toy.scale.toFixed(1)}  (scalar × [{n}, {n}])</MMNote>
-      </>,
+      cos: <MM a={["Î_e", [n, E]]} b={["T̂_eᵀ", [E, n]]} c={["cos", [n, n]]} note="cosine of every image–caption pair" />,
+      scale: <MMNote>logits = e^t · cos, e^t = {toy.scale.toFixed(1)}  (scalar × [{n}, {n}]) · 1 learned number</MMNote>,
       loss_i: <MMNote>row softmax: [{n}, {n}] → −log diagonal → mean</MMNote>,
       loss_t: <MMNote>column softmax: [{n}, {n}] → −log diagonal → mean</MMNote>,
       loss: <MMNote>(loss_i + loss_t) / 2 → scalar</MMNote>,

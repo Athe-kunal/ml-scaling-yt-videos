@@ -1,0 +1,20 @@
+{
+  "id": "vit-clip-siglip-numpy",
+  "title": "ViT → CLIP → SigLIP, barebones in NumPy",
+  "paper": {
+    "title": "Sigmoid Loss for Language Image Pre-Training",
+    "authors": ["Xiaohua Zhai", "Basil Mustafa", "Alexander Kolesnikov", "Lucas Beyer"],
+    "arxiv": "2303.15343",
+    "pdf": "paper.pdf",
+    "code": "https://github.com/google-research/big_vision"
+  },
+  "summary": "Three line-by-line NumPy implementations in one consistent style (no LN gains, no biases inside blocks, explicit weight arguments): a ViT forward pass; CLIP's two towers (ViT with ln_pre/ln_post, causal text transformer pooled at [EOS]) and its symmetric softmax contrastive loss; and SigLIP's towers (MAP attention-pool head with a learned probe, bidirectional last-token text) and its pairwise sigmoid loss with learnable temperature and bias. ViT and CLIP papers are in refs/.",
+  "depends_on": [],
+  "created": "2026-11-18",
+  "status": "ready",
+  "problems": [
+    {"id": "01-vit-forward", "title": "ViT forward pass in NumPy", "difficulty": "medium", "runtime": "python", "concepts": ["patchify", "CLS + positional embedding", "pre-LN MHA block", "LN(CLS) head"], "paper_refs": ["ViT §3.1", "Eq. 1-4"], "milestone": "Barebones image-text models"},
+    {"id": "02-clip-forward-and-loss", "title": "CLIP: both towers and the symmetric contrastive loss", "difficulty": "hard", "runtime": "python", "concepts": ["ln_pre / ln_post", "causal mask + [EOS] pooling", "symmetric softmax CE", "learned temperature"], "paper_refs": ["CLIP §2.3", "Fig. 3", "§2.4"], "milestone": "Barebones image-text models"},
+    {"id": "03-siglip-forward-and-loss", "title": "SigLIP: MAP pooling, last-token text, sigmoid loss", "difficulty": "hard", "runtime": "python", "concepts": ["MAP head (learned probe)", "bidirectional last-token text", "pairwise sigmoid loss", "bias init -10"], "paper_refs": ["SigLIP §3", "Alg. 1"], "milestone": "Barebones image-text models"}
+  ]
+}

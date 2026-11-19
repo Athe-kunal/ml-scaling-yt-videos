@@ -90,8 +90,10 @@ function Flow({ title, blocks, step, showCode, setShowCode }) {
   );
 }
 
-export default function StepShell({ title, subtitle, blocks, steps, scene, tags, controls, matmuls }) {
-  const [idx, setIdx] = useState(0);
+export default function StepShell({ title, subtitle, blocks, steps, scene, tags, controls, matmuls, index, onIndex }) {
+  // optional controlled step (index + onIndex), e.g. one remembered step per sub-tab
+  const [own, setOwn] = useState(0);
+  const idx = index ?? own, setIdx = onIndex ?? setOwn;
   const [playing, setPlaying] = useState(false);
   const [showCode, setShowCode] = useState(false);
   const last = steps.length - 1;

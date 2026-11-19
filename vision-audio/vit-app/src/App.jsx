@@ -5,6 +5,7 @@ import ClipView from "./ClipView";
 import SizesView from "./SizesView";
 import SiglipView from "./SiglipView";
 import VlmView from "./VlmView";
+import ModernVlmView from "./ModernVlmView";
 
 const VIEWS = [
   { id: "vit", label: "Vision Transformer", sub: "patches · CLS · encoder blocks · head", C: ViTView },
@@ -12,10 +13,11 @@ const VIEWS = [
   { id: "clip", label: "CLIP", sub: "two encoders · contrastive loss · zero-shot", C: ClipView },
   { id: "siglip", label: "SigLIP", sub: "sigmoid loss · ring · SigLIP 2", C: SiglipView },
   { id: "vlm", label: "Vision → LLM", sub: "LLaVA · Flamingo · Q-Former · DeepStack", C: VlmView },
+  { id: "modern", label: "Modern VLMs", sub: "Qwen3-VL · DeepSeek-VL2 · Kimi K3 · MiMo-V2.6", C: ModernVlmView },
 ];
 
 export default function App() {
-  const [view, setView] = useState(() => (["#clip", "#siglip", "#names", "#vlm"].includes(location.hash) ? location.hash.slice(1) : "vit"));
+  const [view, setView] = useState(() => (["#clip", "#siglip", "#names", "#vlm", "#modern"].includes(location.hash) ? location.hash.slice(1) : "vit"));
   const { C } = VIEWS.find((v) => v.id === view);
   const pick = (id) => { setView(id); history.replaceState(null, "", `#${id}`); };
   return (
