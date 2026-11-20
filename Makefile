@@ -85,3 +85,13 @@ vit-drills:
 
 vit-drills-validate:
 	$(PAPERFORGE_DIR)/.venv/bin/python $(PAPERFORGE_DIR)/skill/paper-drills/scripts/validate_pack.py $(VIT_PACKS_DIR)/vit-clip-siglip-numpy
+
+.PHONY: whisper whisper-install
+WHISPER_DIR := vision-audio/whisper-app
+WHISPER_PORT ?= 5184
+
+whisper-install:
+	cd $(WHISPER_DIR) && npm install
+
+whisper:
+	cd $(WHISPER_DIR) && npm run dev -- --port $(WHISPER_PORT)
