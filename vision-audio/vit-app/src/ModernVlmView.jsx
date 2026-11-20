@@ -162,11 +162,11 @@ function VitLane({ m, p, pic }) {
 // ------------------------------------------------------------ 1 · image → patch vectors, explicitly
 // one real patch of the picture: its pixels → flatten → × W_patch → one vector,
 // then all patches → [N, d] → ViT. DeepSeek first picks a view (tile or thumbnail).
-const VIEW = { qwen: "2D RoPE", deepseek: "learned 27×27", kimi: "learned + RoPE", mimo: "2D RoPE" };
-function PatchScene({ m }) {
+const VIEW = { qwen: "2D RoPE", deepseek: "learned 27×27", kimi: "learned + RoPE", mimo: "2D RoPE", pali: "learned 16×16" };
+export function PatchScene({ m }) {
   const ds = m.id === "deepseek", P = m.patch, frames = m.pp / (P * P * 3);
   const [view, setView] = useState(0); // deepseek: tiles 0..3, 4 = thumbnail
-  const S = ds ? 384 : 448, g = Math.floor(S / P);
+  const S = ds ? 384 : (m.res ?? 448), g = Math.floor(S / P);
   const [cell, setCell] = useState(null);
   const p = useProgress(`patch-${m.id}-${view}`, 4200);
   const a = seg(p, 0, 0.18), b = seg(p, 0.18, 0.4), f = seg(p, 0.4, 0.6), d = seg(p, 0.6, 0.8), e = seg(p, 0.8, 1);
@@ -175,7 +175,7 @@ function PatchScene({ m }) {
     const src = renderSubject(SUBJECTS[0], 448).canvas, cv = document.createElement("canvas");
     cv.width = cv.height = S;
     const x = cv.getContext("2d");
-    if (!ds) x.drawImage(src, 0, 0);
+    if (!ds) x.drawImage(src, 0, 0, S, S);
     else if (view === 4) x.drawImage(src, 0, 0, 384, 384);
     else x.drawImage(src, -(view & 1) * 384, -(view >> 1) * 384, 768, 768);
     return { url: cv.toDataURL(), ctx: x };
@@ -233,7 +233,7 @@ function PatchScene({ m }) {
       )}
       <svg viewBox={`0 0 ${VB} 392`} width="100%" style={{ maxWidth: 780, display: "block", cursor: "crosshair" }} onClick={pick}>
         {/* 1 · the image and its patch grid */}
-        <Txt x={IX} y={22} a="start" s={ds ? (view === 4 ? "thumbnail 384 × 384" : `tile ${view + 1} · 384 × 384`) : "image 448 × 448"} size={15} w={700} c={T.ink} />
+        <Txt x={IX} y={22} a="start" s={ds ? (view === 4 ? "thumbnail 384 × 384" : `tile ${view + 1} · 384 × 384`) : `image ${S} × ${S}`} size={15} w={700} c={T.ink} />
         <image href={input.url} x={IX} y={IY} width={IS} height={IS} />
         <g opacity={a} stroke={T.bg} strokeWidth={0.7}>
           {Array.from({ length: g + 1 }, (_, k) => <g key={k}><line x1={IX + k * cs} x2={IX + k * cs} y1={IY} y2={IY + g * cs} /><line x1={IX} x2={IX + g * cs} y1={IY + k * cs} y2={IY + k * cs} /></g>)}
