@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { T, mono, btn } from "./theme";
-import { SIGNALS, toInt16, fromInt16, padOrTrim, logMel, recordMic, play } from "./dsp";
+import { SIGNALS, toInt16, fromInt16, padOrTrim, logMel, play } from "./dsp";
 import { SIZES, toyStem } from "./model";
 import AudioView from "./AudioView";
 import EncoderView from "./EncoderView";
@@ -18,48 +18,26 @@ const VIEWS = [
   { id: "qwen", label: "Qwen2-Audio", sub: "encoder → pool → Linear → LLM", C: QwenAudioView },
 ];
 
-// the shared audio: one signal, one model size, computed once for every tab
+// the shared audio: one built-in melody, computed once for every tab. One model: Whisper tiny.
+const size = "tiny";
 function useAudio() {
-  const [name, setName] = useState("melody");
-  const [mic, setMic] = useState(null);
-  const [size, setSize] = useState("tiny");
-  const [recording, setRecording] = useState(false);
   const nMels = SIZES[size].mels;
-  const raw = useMemo(() => (name === "mic" && mic ? mic : SIGNALS[name === "mic" ? "melody" : name]()), [name, mic]);
-  const q = useMemo(() => toInt16(raw), [raw]);
-  const y = useMemo(() => fromInt16(q), [q]);
-  const y30 = useMemo(() => padOrTrim(y), [y]);
-  const lm = useMemo(() => logMel(y30, nMels), [y30, nMels]);
-  const stem = useMemo(() => toyStem(lm.scaled, nMels), [lm, nMels]);
-  const rec = async () => {
-    setRecording(true);
-    try { setMic(await recordMic(3)); setName("mic"); } catch (e) { console.warn(e); }
-    setRecording(false);
-  };
-  return { name, setName, size, setSize, nMels, q, y, y30, lm, stem, rec, recording, hasMic: !!mic, m: SIZES[size] };
+  return useMemo(() => {
+    const q = toInt16(SIGNALS.melody());
+    const y = fromInt16(q);
+    const y30 = padOrTrim(y);
+    const lm = logMel(y30, nMels);
+    const stem = toyStem(lm.scaled, nMels);
+    return { name: "melody", size, nMels, q, y, y30, lm, stem, m: SIZES[size] };
+  }, [nMels]);
 }
 
 function Controls({ A }) {
   return (
-    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", padding: "10px clamp(16px, 3vw, 36px) 0", maxWidth: 1480, margin: "0 auto" }}>
-      <div style={{ display: "grid", gap: 4 }}>
-        <span style={{ fontSize: 13, color: T.dim, letterSpacing: "0.08em" }}>AUDIO</span>
-        <div style={{ display: "flex", gap: 4 }}>
-          {["melody", "voice", "chirp"].map((s) => <button key={s} onClick={() => A.setName(s)} style={{ ...btn(A.name === s), height: 30, fontSize: 15 }}>{s}</button>)}
-          <button onClick={A.rec} disabled={A.recording} style={{ ...btn(A.name === "mic"), height: 30, fontSize: 15, color: A.recording ? T.bad : undefined }}>
-            {A.recording ? "● recording 3 s" : A.hasMic ? "mic ↻" : "● mic"}
-          </button>
-          <button onClick={() => play(A.y)} style={{ ...btn(false), height: 30, fontSize: 15 }}>▶ hear</button>
-        </div>
-      </div>
-      <div style={{ display: "grid", gap: 4 }}>
-        <span style={{ fontSize: 13, color: T.dim, letterSpacing: "0.08em" }}>MODEL SIZE</span>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {Object.keys(SIZES).map((s) => <button key={s} onClick={() => A.setSize(s)} style={{ ...btn(A.size === s), height: 30, fontSize: 15 }}>{s}</button>)}
-        </div>
-      </div>
-      <span style={{ fontSize: 14, color: T.dim, paddingBottom: 6 }}>
-        {A.m.mels} mels · D {A.m.D} · {A.m.h} heads · enc {A.m.Le} / dec {A.m.Ld} layers · {A.m.params}
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", padding: "10px clamp(16px, 3vw, 36px) 0", maxWidth: 1480, margin: "0 auto" }}>
+      <button onClick={() => play(A.y)} style={{ ...btn(false), height: 30, fontSize: 15 }}>▶ hear the melody</button>
+      <span style={{ fontSize: 14, color: T.dim, }}>
+        Whisper tiny · {A.m.mels} mels · D {A.m.D} · {A.m.h} heads · {A.m.Le} + {A.m.Ld} layers
       </span>
     </div>
   );

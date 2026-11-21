@@ -179,7 +179,6 @@ export default function DecoderView({ A }) {
             <Row gap={24}>
               <Stat k="1 timestamp step" v="0.02 s = 1 audio token" tone={KIND_COL.ts} />
               <Stat k="1501 × 0.02" v="0.00 … 30.00 s" tone={KIND_COL.ts} />
-              {V === 51866 && <Stat k="large-v3" v="100 languages → +1" tone={T.wire} />}
             </Row>
           </div>
         );

@@ -1,0 +1,115 @@
+{
+  "tests": [
+    {
+      "name": "test_stacks_are_dilated_high_res_neighbours[cfg0]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.022
+    },
+    {
+      "name": "test_stacks_are_dilated_high_res_neighbours[cfg1]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.002
+    },
+    {
+      "name": "test_stacks_are_dilated_high_res_neighbours[cfg2]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.003
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg0-sched0]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.005
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg0-sched1]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.005
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg0-sched2]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.005
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg0-sched3]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.005
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg1-sched0]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.003
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg1-sched1]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.003
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg1-sched2]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.003
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg1-sched3]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.003
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg2-sched0]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.007
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg2-sched1]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.008
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg2-sched2]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.007
+    },
+    {
+      "name": "test_forward_matches_algorithm_1[cfg2-sched3]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.007
+    },
+    {
+      "name": "test_reduces_to_llava_when_no_layer_is_selected",
+      "status": "passed",
+      "message": "",
+      "duration": 0.004
+    },
+    {
+      "name": "test_text_before_image_is_untouched_by_the_stacks",
+      "status": "passed",
+      "message": "",
+      "duration": 0.003
+    }
+  ],
+  "passed": 17,
+  "total": 17,
+  "all_passed": true,
+  "timed_out": false,
+  "exit_code": 0,
+  "duration": 0.666,
+  "stdout": ".................                                                        [100%]\n17 passed in 0.21s\n",
+  "stderr": "",
+  "timestamp": "2026-11-21T14:21:27"
+}

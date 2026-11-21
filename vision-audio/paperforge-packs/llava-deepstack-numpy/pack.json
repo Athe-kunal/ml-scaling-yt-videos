@@ -1,0 +1,19 @@
+{
+  "id": "llava-deepstack-numpy",
+  "title": "LLaVA → DeepStack: how ViT embeddings enter the LM, in NumPy",
+  "paper": {
+    "title": "Improved Baselines with Visual Instruction Tuning (LLaVA-1.5)",
+    "authors": ["Haotian Liu", "Chunyuan Li", "Yuheng Li", "Yong Jae Lee"],
+    "arxiv": "2310.03744",
+    "pdf": "paper.pdf",
+    "code": "https://github.com/haotian-liu/LLaVA"
+  },
+  "summary": "One walk-through of the vision → language bridge, in two problems. The ViT block and the LLaMA block are given (solved in the ViT pack). The bridge is what you write. 01 LLaVA: penultimate-layer patch features (no ln_post, no CLS), a 2-layer GELU MLP, splicing N tokens in place of the <image> id, RoPE positions over the spliced sequence, and a loss that ignores image slots. 02 DeepStack: the same low-res sequence, plus high-res tiles from the same ViT and projector, dilation-sampled into 4 stacks aligned with the low-res cells and residual-added at the visual positions before early LM layers (Alg. 1), with no extra context. LLaVA-1 and DeepStack papers are in refs/.",
+  "depends_on": ["vit-clip-siglip-numpy"],
+  "created": "2026-11-21",
+  "status": "ready",
+  "problems": [
+    {"id": "01-llava-bridge", "title": "LLaVA: from ViT patch features to LM input tokens", "difficulty": "hard", "runtime": "python", "concepts": ["hidden_states[-2], no ln_post, drop CLS", "mlp2x_gelu projector", "splice at <image> (T-1+N)", "positions after splice", "-100 on image slots"], "paper_refs": ["LLaVA §4.1", "LLaVA-1.5 §3.2"], "milestone": "ViT → LM bridge"},
+    {"id": "02-deepstack", "title": "DeepStack: stack high-res tokens into the LM's early layers", "difficulty": "hard", "runtime": "python", "concepts": ["2x2 tiles, shared ViT + projector", "Sampling2D dilation", "residual add at vis_pos before layer idx", "l_start / n schedule", "same context length"], "paper_refs": ["DeepStack §3.2", "Alg. 1", "Eq. 4-5"], "milestone": "ViT → LM bridge"}
+  ]
+}

@@ -107,7 +107,7 @@ export default function EncoderView({ A }) {
   const pos = useMemo(() => { const P = new Float32Array(sinD * 1500); for (let c = 0; c < sinD; c++) for (let t = 0; t < 1500; t++) P[c * 1500 + t] = sinusoid(t, c, D); return P; }, [D, sinD]);
 
   const steps = [
-    { id: "mel", block: "mel", caption: "80 or 128 rows × 3000 columns", vars: () => [["M", nMels], ["frames", 3000], ["1 column", "10 ms"]] },
+    { id: "mel", block: "mel", caption: "80 rows × 3000 columns", vars: () => [["M", nMels], ["frames", 3000], ["1 column", "10 ms"]] },
     { id: "conv1", block: "conv1", caption: "look at 3 frames, mix all mels", vars: () => [["kernel", `[${D}, ${nMels}, 3]`], ["frame", ft]] },
     { id: "conv2", block: "conv2", caption: "stride 2 halves the time axis", vars: () => [["kernel", `[${D}, ${D}, 3]`], ["token", `${qt} = ${(qt * 0.02).toFixed(2)} s`]] },
     { id: "pos", block: "pos", caption: "fixed sin / cos per position", vars: () => [["buffer", `[1500, ${D}]`], ["learned", "no"]] },

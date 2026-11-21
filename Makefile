@@ -75,7 +75,7 @@ vit-fuzz:
 vit-inspect:
 	cd $(VIT_DIR) && npx bombadil browser inspect bombadil-out
 
-# PaperForge drills (ViT / CLIP / SigLIP in NumPy), served from vision-audio/paperforge-packs
+# PaperForge drills (ViT / CLIP / SigLIP, LLaVA / DeepStack in NumPy), served from vision-audio/paperforge-packs
 .PHONY: vit-drills vit-drills-validate
 PAPERFORGE_DIR ?= $(HOME)/Desktop/DEV/Learning/paperforge
 VIT_PACKS_DIR := $(CURDIR)/vision-audio/paperforge-packs
@@ -85,6 +85,7 @@ vit-drills:
 
 vit-drills-validate:
 	$(PAPERFORGE_DIR)/.venv/bin/python $(PAPERFORGE_DIR)/skill/paper-drills/scripts/validate_pack.py $(VIT_PACKS_DIR)/vit-clip-siglip-numpy
+	$(PAPERFORGE_DIR)/.venv/bin/python $(PAPERFORGE_DIR)/skill/paper-drills/scripts/validate_pack.py $(VIT_PACKS_DIR)/llava-deepstack-numpy
 
 .PHONY: whisper whisper-install
 WHISPER_DIR := vision-audio/whisper-app

@@ -69,7 +69,7 @@ const P = (t, k = "text", id) => ({ t, k, id });
 const BEFORE = [P("<|im_start|>", "sp", ID.im_start), P("system"), P("\\n"), P("You are a helpful assistant."), P("<|im_end|>", "sp", ID.im_end), P("\\n"),
   P("<|im_start|>", "sp", ID.im_start), P("user"), P("\\n"), P("Audio 1: "), P("<|audio_bos|>", "sp", ID.audio_bos)];
 const AFTER = [P("<|audio_eos|>", "sp", ID.audio_eos), P("\\n"), P("What's that sound?"), P("<|im_end|>", "sp", ID.im_end), P("\\n"), P("<|im_start|>", "sp", ID.im_start), P("assistant"), P("\\n")];
-const ANSWER = { melody: ["It", "'s", " a", " piano", " melody", "."], voice: ["A", " person", " is", " singing", " vowels", "."], chirp: ["A", " rising", " electronic", " tone", "."], mic: ["Someone", " is", " speaking", "."] };
+const ANSWER = ["It", "'s", " a", " piano", " melody", "."];
 const KC = { text: "#8DB4FF", sp: "#FF8AC6", audio: "#6EF3DD", ans: "#FFC94D", ph: "#5A6B80" };
 // approximate token counts for the text pieces (for the sequence length)
 const NTOK = (p) => (p.k === "sp" ? 1 : Math.max(1, p.t.split(/(?=[ '?:.])/).length));
@@ -121,7 +121,7 @@ export default function QwenAudioView({ A }) {
   const Lf = Math.min(3000, Math.ceil(n / HOP_LENGTH));
   const afterConv = Math.floor((Lf - 1) / 2) + 1;
   const N = Math.floor((afterConv - 2) / 2) + 1;
-  const ans = ANSWER[A.name] ?? ANSWER.melody;
+  const ans = ANSWER;
   const nBefore = BEFORE.reduce((a, p) => a + NTOK(p), 0), nAfter = AFTER.reduce((a, p) => a + NTOK(p), 0);
   const S = nBefore + N + nAfter;
   const kinds = useMemo(() => [...Array(nBefore).fill("text").map((k, i) => (i === 0 || i === nBefore - 1 ? "sp" : k)), ...Array(N).fill("audio"), ...Array(nAfter).fill("text").map((k, i) => (i === 0 ? "sp" : k))], [nBefore, N, nAfter]);

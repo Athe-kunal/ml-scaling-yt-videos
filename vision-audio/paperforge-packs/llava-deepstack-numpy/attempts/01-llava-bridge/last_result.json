@@ -1,0 +1,67 @@
+{
+  "tests": [
+    {
+      "name": "test_vision_features_are_penultimate_patch_tokens[cfg0]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.117
+    },
+    {
+      "name": "test_vision_features_are_penultimate_patch_tokens[cfg1]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.001
+    },
+    {
+      "name": "test_vision_features_are_penultimate_patch_tokens[cfg2]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.002
+    },
+    {
+      "name": "test_projector_is_two_layer_gelu_mlp",
+      "status": "passed",
+      "message": "",
+      "duration": 0.001
+    },
+    {
+      "name": "test_merge_puts_image_tokens_at_the_placeholder",
+      "status": "passed",
+      "message": "",
+      "duration": 0.001
+    },
+    {
+      "name": "test_forward_matches_reference[cfg0]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.003
+    },
+    {
+      "name": "test_forward_matches_reference[cfg1]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.001
+    },
+    {
+      "name": "test_forward_matches_reference[cfg2]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.004
+    },
+    {
+      "name": "test_text_before_image_cannot_see_the_image",
+      "status": "passed",
+      "message": "",
+      "duration": 0.001
+    }
+  ],
+  "passed": 9,
+  "total": 9,
+  "all_passed": true,
+  "timed_out": false,
+  "exit_code": 0,
+  "duration": 0.989,
+  "stdout": ".........                                                                [100%]\n9 passed in 0.30s\n",
+  "stderr": "",
+  "timestamp": "2026-11-21T14:21:26"
+}

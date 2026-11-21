@@ -32,45 +32,7 @@ function melody() {
   return y;
 }
 
-function voice() {
-  // a vowel-like voice: pitch glides, three formants move a → i → u, three syllables
-  const n = Math.round(3.6 * SAMPLE_RATE), y = new Float32Array(n);
-  const syl = [[0.15, 0.95], [1.25, 2.05], [2.4, 3.3]];
-  const F = [[[730, 1090, 2440], [270, 2290, 3010]], [[300, 870, 2240], [530, 1840, 2480]], [[660, 1720, 2410], [730, 1090, 2440]]];
-  let phase = 0;
-  for (let i = 0; i < n; i++) {
-    const t = i / SAMPLE_RATE;
-    const k = syl.findIndex(([a, b]) => t >= a && t < b);
-    if (k < 0) continue;
-    const [a, b] = syl[k], u = (t - a) / (b - a);
-    const f0 = 120 + 50 * Math.sin(Math.PI * u) + 15 * k;
-    phase += TAU * f0 / SAMPLE_RATE;
-    const env = Math.sin(Math.PI * u) ** 0.6;
-    const fm = F[k][0].map((v, j) => v + (F[k][1][j] - v) * u);
-    let v = 0;
-    for (let h = 1; h * f0 < 7600; h++) {
-      const fh = h * f0;
-      let g = 0;
-      fm.forEach((fc, j) => { g += (1 / (1 + ((fh - fc) / (80 + 40 * j)) ** 2)) / (j + 1); });
-      v += g * Math.sin(h * phase) / Math.sqrt(h);
-    }
-    y[i] = 0.18 * env * v;
-  }
-  return y;
-}
-
-function chirp() {
-  // one exponential sweep 100 Hz → 7 kHz over 2.5 s
-  const n = Math.round(3.0 * SAMPLE_RATE), y = new Float32Array(n), d = 2.5, f0 = 100, f1 = 7000, k = Math.log(f1 / f0) / d;
-  for (let i = 0; i < Math.round(d * SAMPLE_RATE); i++) {
-    const t = i / SAMPLE_RATE, ph = TAU * f0 * (Math.exp(k * t) - 1) / k;
-    const env = Math.min(1, t / 0.02, (d - t) / 0.02);
-    y[i + 4000] = 0.5 * env * Math.sin(ph);
-  }
-  return y;
-}
-
-export const SIGNALS = { melody, voice, chirp };
+export const SIGNALS = { melody };
 
 // load_audio: ffmpeg -f s16le -ac 1 -ar 16000 → int16 → float32 / 32768
 export function toInt16(y) {
@@ -189,31 +151,6 @@ export function logMel(y30, nMels = N_MELS) {
 
 // content length in frames / tokens
 export const framesOf = (nSamples) => Math.round(nSamples / HOP_LENGTH);
-
-// ---------------------------------------------------------------- microphone
-// record a few seconds; decodeAudioData into a 16 kHz context resamples like ffmpeg -ar 16000
-export async function recordMic(seconds = 3) {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const rec = new MediaRecorder(stream), chunks = [];
-  rec.ondataavailable = (e) => chunks.push(e.data);
-  const done = new Promise((r) => (rec.onstop = r));
-  rec.start();
-  await new Promise((r) => setTimeout(r, seconds * 1000));
-  rec.stop();
-  await done;
-  stream.getTracks().forEach((t) => t.stop());
-  const buf = await new Blob(chunks).arrayBuffer();
-  const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
-  const audio = await ctx.decodeAudioData(buf);
-  ctx.close();
-  // -ac 1: average the channels
-  const y = new Float32Array(audio.length);
-  for (let c = 0; c < audio.numberOfChannels; c++) {
-    const d = audio.getChannelData(c);
-    for (let i = 0; i < y.length; i++) y[i] += d[i] / audio.numberOfChannels;
-  }
-  return y;
-}
 
 export function play(y) {
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
