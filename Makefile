@@ -100,3 +100,34 @@ whisper-install:
 
 whisper:
 	cd $(WHISPER_DIR) && npm run dev -- --port $(WHISPER_PORT)
+
+# Manim lecture slides (ManimGL + manim-slides): → next, ← previous, Q quit, F fullscreen
+# Each lesson is split into sections; only sections whose code changed re-render, in parallel.
+#   make whisper-manim                   render what changed, then present all lessons
+#   make whisper-manim L=L2              one lesson (any part of a scene name: L2_Fourier, probe, ...)
+#   make whisper-manim Q=-l              fast 480p while editing (default: --hd 1080p)
+#   make whisper-manim-html              same slides in the browser (fits any screen)
+.PHONY: whisper-manim whisper-manim-html whisper-manim-install whisper-manim-render whisper-manim-test whisper-manim-clean
+WM_DIR := vision-audio/whisper-manim
+Q ?= --hd
+WM_ARGS = $(L) --quality=$(Q)
+
+whisper-manim-install:
+	cd $(WM_DIR) && uv sync
+
+whisper-manim-render:
+	cd $(WM_DIR) && uv run python render.py $(WM_ARGS)
+
+# desktop player: fullscreen + letterboxed on whatever display it opens on
+whisper-manim:
+	cd $(WM_DIR) && uv run python render.py $(WM_ARGS) --present
+
+# browser version (reveal.js): scales to any window/projector, same ← / → keys
+whisper-manim-html:
+	cd $(WM_DIR) && uv run python render.py $(WM_ARGS) --html
+
+whisper-manim-test:
+	cd $(WM_DIR) && uv run pytest -q
+
+whisper-manim-clean:
+	rm -rf $(WM_DIR)/slides $(WM_DIR)/media $(WM_DIR)/videos
