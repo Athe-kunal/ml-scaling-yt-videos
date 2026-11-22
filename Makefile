@@ -80,8 +80,12 @@ vit-inspect:
 PAPERFORGE_DIR ?= $(HOME)/Desktop/DEV/Learning/paperforge
 VIT_PACKS_DIR := $(CURDIR)/vision-audio/paperforge-packs
 
+# own ports, so it never talks to another PaperForge runner (which would list every pack)
+DRILLS_APP_PORT ?= 5175
+DRILLS_RUNNER_PORT ?= 8766
+
 vit-drills:
-	PAPERFORGE_PACKS=$(VIT_PACKS_DIR) $(PAPERFORGE_DIR)/start.sh
+	PAPERFORGE_PACKS=$(VIT_PACKS_DIR) PAPERFORGE_APP_PORT=$(DRILLS_APP_PORT) PAPERFORGE_RUNNER_PORT=$(DRILLS_RUNNER_PORT) $(PAPERFORGE_DIR)/start.sh
 
 vit-drills-validate:
 	$(PAPERFORGE_DIR)/.venv/bin/python $(PAPERFORGE_DIR)/skill/paper-drills/scripts/validate_pack.py $(VIT_PACKS_DIR)/vit-clip-siglip-numpy

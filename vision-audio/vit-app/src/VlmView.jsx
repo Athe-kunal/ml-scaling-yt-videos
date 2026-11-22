@@ -1,12 +1,12 @@
-import { useMemo } from "react";
-import { T, mono } from "./theme";
+import { createContext, useContext, useMemo, useState } from "react";
+import { T, mono, btn } from "./theme";
 import { useProgress, ease, clamp01, lerp } from "./anim";
 import StepShell from "./StepShell";
 import { MM, MMNote, MatMulCard } from "./draw";
 import { SUBJECTS, renderSubject } from "./model";
 
-// How four vision-language models feed ViT output into an LLM decoder, shown as
-// four lanes that move in lockstep. Toy picture: a 4×4 patch grid; the labels
+// How four vision-language models feed ViT output into an LLM decoder, one at a
+// time (sub-tabs), each with its key numbers beside the lane. Toy picture: a 4×4 patch grid; the labels
 // carry the real shapes (checked in HF transformers + open_flamingo source).
 //   LLaVA-1.5   every patch → MLP → one LLM input token
 //   Flamingo    Perceiver squeezes to 64 latents; text reads them by gated cross-attn
@@ -74,16 +74,45 @@ const Txt = ({ x, y, s, size = 14, c = T.dim, a = "middle", w = 400, op = 1 }) =
   <text x={x} y={y} textAnchor={a} fontFamily={mono} fontSize={size} fontWeight={w} fill={c} opacity={op}>{s}</text>
 );
 
-function Lanes({ render }) {
+// key numbers of one method; the rows that matter for the current step are lit
+const ROWS = [
+  ["vision encoder", (m) => m.vit],
+  ["ViT output", (m) => `[${m.vitN}, ${m.vitD}] · ${m.tap}`],
+  ["bridge", (m) => m.bridge],
+  ["image tokens", (m) => (m.id === "flamingo" ? "64 (aside)" : `${m.nVis}`)],
+  ["enters at", (m) => ({ llava: "input", flamingo: "x-attn, every 4th", qformer: "input", deepstack: "input + layers 1–3" }[m.id])],
+  ["new LLM layers", (m) => (m.id === "flamingo" ? "8 gated x-attn" : "none")],
+  ["LLM", (m) => `${m.llm} · ${m.L} × ${m.D}`],
+  ["K,V kept after prompt", (m) => fmtMB(kvMB(m, realKeys(m, 0)))],
+  ["new token looks at", (m) => { const [i, t] = lookAt(m, 1); return `${i} img + ${t} txt`; }],
+  ["LLM trained?", (m) => ({ llava: "stage 2", flamingo: "never", qformer: "never", deepstack: "stage 2+" }[m.id])],
+];
+const STEP_ROWS = {
+  vit: ["vision encoder", "ViT output"], bridge: ["bridge", "image tokens"], inside: ["bridge"],
+  enter: ["image tokens", "enters at"], layer: ["enters at", "new LLM layers", "new token looks at"],
+  prefill: ["K,V kept after prompt"], dec1: ["new token looks at"], dec2: ["new token looks at"], frozen: ["LLM trained?"],
+};
+
+function Solo({ m, stepId, children }) {
+  const lit = STEP_ROWS[stepId] ?? [];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
-      {METHODS.map((m, i) => (
-        <div key={m.id} style={{ background: T.well, border: `1px solid ${m.col}55`, borderRadius: 10, padding: "8px 5px 2px", minWidth: 0 }}>
-          <div style={{ fontFamily: mono, fontSize: 17, fontWeight: 700, color: m.col, textAlign: "center" }}>{m.name}</div>
-          <div style={{ fontFamily: mono, fontSize: 13, color: T.dim, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.model}</div>
-          <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", marginTop: 4 }}>{render(m, i)}</svg>
-        </div>
-      ))}
+    <div style={{ display: "flex", gap: 28, alignItems: "flex-start", flexWrap: "wrap" }}>
+      <div style={{ width: 300, flex: "none", background: T.well, border: `1px solid ${m.col}55`, borderRadius: 10, padding: "8px 6px 2px" }}>
+        <div style={{ fontFamily: mono, fontSize: 18, fontWeight: 700, color: m.col, textAlign: "center" }}>{m.name}</div>
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", marginTop: 4 }}>{children}</svg>
+      </div>
+      <div style={{ display: "grid", minWidth: 300, flex: "1 1 300px", maxWidth: 480, fontFamily: mono }}>
+        <div style={{ fontSize: 15, color: T.dim, paddingBottom: 8 }}>{m.model}</div>
+        {ROWS.map(([k, f]) => {
+          const on = lit.includes(k);
+          return (
+            <div key={k} style={{ display: "grid", gridTemplateColumns: "190px 1fr", gap: 10, padding: "9px 8px", borderTop: `1px solid ${T.rule}`, background: on ? `${m.col}14` : "none", borderLeft: `3px solid ${on ? m.col : "transparent"}` }}>
+              <span style={{ fontSize: 14, color: on ? m.col : T.dim }}>{k}</span>
+              <span style={{ fontSize: 16, color: on ? T.ink : T.soft, fontWeight: on ? 700 : 400 }}>{f(m)}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -519,23 +548,15 @@ function FrozenLane({ m, p }) {
 }
 
 // ---- step 9: the comparison table
-function Compare() {
-  const rows = [
-    ["image tokens", (m) => (m.id === "flamingo" ? "64 (aside)" : `${m.nVis}`)],
-    ["bridge", (m) => m.bridge],
-    ["enters at", (m) => ({ llava: "input", flamingo: "x-attn, every 4th", qformer: "input", deepstack: "input + layers 1–3" }[m.id])],
-    ["new LLM layers", (m) => (m.id === "flamingo" ? "8 gated x-attn" : "none")],
-    ["K,V kept after prompt", (m) => fmtMB(kvMB(m, realKeys(m, 0)))],
-    ["new token looks at", (m) => { const [i, t] = lookAt(m, 1); return `${i} img + ${t} txt`; }],
-    ["LLM trained?", (m) => ({ llava: "stage 2", flamingo: "never", qformer: "never", deepstack: "stage 2+" }[m.id])],
-  ];
+function Compare({ sel }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "150px repeat(4, minmax(0, 1fr))", gap: "2px 10px", fontFamily: mono, padding: 6 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "190px repeat(4, minmax(0, 1fr))", gap: "2px 10px", fontFamily: mono, padding: 6 }}>
       <span />
-      {METHODS.map((m) => <div key={m.id} style={{ fontSize: 17, fontWeight: 700, color: m.col, padding: "4px 0 8px" }}>{m.name}</div>)}
-      {rows.map(([k, f]) => [
+      {METHODS.map((m) => <div key={m.id} style={{ fontSize: 17, fontWeight: 700, color: m.col, padding: "4px 6px 8px", opacity: m.id === sel ? 1 : 0.7 }}>{m.name}</div>)}
+      {ROWS.map(([k, f]) => [
         <div key={k} style={{ fontSize: 14, color: T.dim, padding: "9px 0", borderTop: `1px solid ${T.rule}` }}>{k}</div>,
-        ...METHODS.map((m) => <div key={m.id + k} style={{ fontSize: 16, color: T.ink, padding: "9px 0", borderTop: `1px solid ${T.rule}` }}>{f(m)}</div>),
+        ...METHODS.map((m) => <div key={m.id + k} style={{ fontSize: 15, padding: "9px 6px", borderTop: `1px solid ${T.rule}`,
+          color: m.id === sel ? T.ink : T.soft, fontWeight: m.id === sel ? 700 : 400, background: m.id === sel ? `${m.col}14` : "none" }}>{f(m)}</div>),
       ])}
       <div style={{ gridColumn: "1 / -1", fontSize: 14, color: T.dim, marginTop: 10 }}>KV cache in fp16 · toy 4-word prompt · Qwen3-8B caches 8 KV heads, the others 32</div>
     </div>
@@ -555,7 +576,7 @@ const CODE = {
     "flamingo:  v = perceiver(f, latents)   # 6 layers → [64, 1024]",
     "qformer:   v = proj(qformer(queries, f))  # [32, 768] → [32, 4096]",
     "deepstack: v = merger(f.view(196, 4608))          # [196, 4096]",
-    "           ds = [merger_k(t.view(196, 4608)) for t in taps]",
+    "deepstack: ds = [merger_k(t.view(196, 4608)) for t in taps]",
   ],
   inside: [
     "llava:     v = W2(gelu(W1(x)))",
@@ -565,18 +586,20 @@ const CODE = {
   ],
   enter: [
     "x = embed(input_ids)                    # [T, 4096]",
-    "x[image_slots] = v                      # llava · qformer · deepstack",
-    "# flamingo: one <image> token, v stays aside",
+    "llava:     x[image_slots] = v           # 576 slots",
+    "qformer:   x = cat([v, x])              # 32 tokens in front",
+    "deepstack: x[image_slots] = v           # 196 slots · ds waits",
+    "flamingo:  # one <image> token, v stays aside",
   ],
   layer: [
     "for i, layer in enumerate(llm.layers):",
-    "    if flamingo and i % 4 == 0: h = h + tanh(α_i) * xattn(h, v)",
+    "flamingo:      if i % 4 == 0: h = h + tanh(α_i) * xattn(h, v)",
     "    h = layer(h)                       # causal self-attn + MLP",
-    "    if deepstack and i < 3: h[image_slots] += ds[i]",
+    "deepstack:     if i < 3: h[image_slots] += ds[i]",
   ],
   prefill: ["logits, cache = llm(x, use_cache=True)   # whole prompt in one pass", "tok = logits[-1].argmax()"],
   dec: ["while tok != eos:", "    logits, cache = llm(embed(tok), past_key_values=cache)   # 1 row in", "    tok = logits[-1].argmax()"],
-  frozen: ["vit.requires_grad_(False)   # every method, at least at first", "flamingo: x-attn gates α start at 0 → the LLM starts unchanged"],
+  frozen: ["vit.requires_grad_(False)   # every method, at least at first", "flamingo:  x-attn gates α start at 0 → the LLM starts unchanged"],
 };
 
 const FLOW = [
@@ -605,9 +628,9 @@ const FLOW = [
 ];
 
 const STEPS = [
-  { id: "vit", block: "vit", caption: "one image, four vision encoders → patch vectors" },
+  { id: "vit", block: "vit", caption: "image → vision encoder → patch vectors" },
   { id: "bridge", block: "bridge", caption: "squeeze and translate for the LLM" },
-  { id: "inside", block: "inside", caption: "one layer inside each bridge" },
+  { id: "inside", block: "inside", caption: "one layer inside the bridge" },
   { id: "enter", block: "enter", caption: "where the image goes into the LLM" },
   { id: "layer", block: "layer", caption: "up the layers: what “?” looks at" },
   { id: "prefill", block: "prefill", caption: "prefill: the whole prompt at once → KV cache → “a”" },
@@ -617,16 +640,17 @@ const STEPS = [
   { id: "compare", block: "compare", caption: "side by side" },
 ];
 
-function Scene({ st }) {
-  const pic = usePic(), p = useProgress(st.id, st.id.startsWith("dec") || st.id === "prefill" || st.id === "layer" || st.id === "inside" ? 3200 : 2200);
-  if (st.id === "compare") return <Compare />;
+function Scene({ st, m }) {
+  const pic = usePic(), p = useProgress(st.id + m.id, st.id.startsWith("dec") || st.id === "prefill" || st.id === "layer" || st.id === "inside" ? 3200 : 2200);
+  if (st.id === "compare") return <Compare sel={m.id} />;
   const L = { vit: VitLane, bridge: BridgeLane, inside: InsideLane, enter: EnterLane, layer: LayerLane, frozen: FrozenLane }[st.id];
   const s = { prefill: 0, dec1: 1, dec2: 2 }[st.id];
-  return <Lanes render={(m) => (L ? <L m={m} p={p} pic={pic} /> : <GenLane m={m} p={p} pic={pic} s={s} />)} />;
+  return <Solo m={m} stepId={st.id}>{L ? <L m={m} p={p} pic={pic} /> : <GenLane m={m} p={p} pic={pic} s={s} />}</Solo>;
 }
 
 const Tag = ({ m }) => <span style={{ display: "inline-block", minWidth: 92, color: m.col, fontWeight: 700 }}>{m.name}</span>;
-const ML = ({ m, children }) => <div style={{ display: "grid", gridTemplateColumns: "96px minmax(0, 1fr)", alignItems: "baseline", fontFamily: mono, fontSize: 15 }}><Tag m={m} /><div style={{ display: "grid", gap: 2 }}>{children}</div></div>;
+const SelCtx = createContext(null);       // the picked method: the matmul card shows only its lines
+const ML = ({ m, children }) => useContext(SelCtx) !== m.id ? null : <div style={{ display: "grid", gridTemplateColumns: "96px minmax(0, 1fr)", alignItems: "baseline", fontFamily: mono, fontSize: 15 }}><Tag m={m} /><div style={{ display: "grid", gap: 2 }}>{children}</div></div>;
 const [LV, FL, QF, DS] = METHODS;
 
 function matmuls(st) {
@@ -683,16 +707,50 @@ function matmuls(st) {
   return <MatMulCard>{body[st.id] ?? dec(st.id === "dec1" ? 1 : 2)}</MatMulCard>;
 }
 
+// keep only this method's code lines ("llava: …" lines of the others are dropped)
+const flowFor = (id) => FLOW.map((b) => {
+  const fix = (it) => (it.code ? { ...it, code: it.code.filter((l) => !METHODS.some((o) => o.id !== id && l.startsWith(`${o.id}:`))) } : it);
+  return b.items ? { ...b, items: b.items.map(fix) } : fix(b);
+});
+
 export default function VlmView() {
+  const [sel, setSel] = useState(() => {
+    try { return METHODS.find((m) => m.id === localStorage.getItem("vlm-arch"))?.id ?? "llava"; } catch { return "llava"; }
+  });
+  const pick = (id) => { setSel(id); try { localStorage.setItem("vlm-arch", id); } catch { /* ignore */ } };
+  const m = METHODS.find((x) => x.id === sel);
+  // each sub-tab keeps its own step: first visit starts at step 1, later visits resume
+  const [stepOf, setStepOf] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("vlm-arch-steps")) ?? {}; } catch { return {}; }
+  });
+  const setStep = (i) => setStepOf((o) => {
+    const n = { ...o, [sel]: i };
+    try { localStorage.setItem("vlm-arch-steps", JSON.stringify(n)); } catch { /* ignore */ }
+    return n;
+  });
+  const flow = useMemo(() => flowFor(sel), [sel]);
   return (
-    <StepShell
-      title="Vision → LLM"
-      subtitle="toy picture and probabilities · shapes are the real ones"
-      blocks={FLOW}
-      steps={STEPS}
-      scene={(st) => <div style={{ minHeight: 420 }}><Scene st={st} /></div>}
-      matmuls={matmuls}
-      controls={null}
-    />
+    <SelCtx.Provider value={sel}>
+      <StepShell
+        title="Vision → LLM"
+        subtitle="toy picture and probabilities · shapes are the real ones"
+        blocks={flow}
+        steps={STEPS}
+        index={stepOf[sel] ?? 0}
+        onIndex={setStep}
+        scene={(st) => <div style={{ minHeight: 420 }}><Scene key={st.id + sel} st={st} m={m} /></div>}
+        matmuls={matmuls}
+        controls={
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {METHODS.map((x) => (
+              <button key={x.id} onClick={() => pick(x.id)} style={{
+                ...btn(x.id === sel), fontSize: 15, padding: "6px 14px", fontWeight: x.id === sel ? 700 : 400,
+                color: x.id === sel ? x.col : T.soft, borderColor: x.id === sel ? x.col : T.rule, background: x.id === sel ? `${x.col}18` : T.well,
+              }}>{x.name}</button>
+            ))}
+          </div>
+        }
+      />
+    </SelCtx.Provider>
   );
 }

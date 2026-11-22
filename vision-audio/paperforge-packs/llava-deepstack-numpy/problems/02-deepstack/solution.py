@@ -113,16 +113,38 @@ def merge_image_tokens(input_ids, image_token_id, embed, image_tokens, labels):
     """Replace the single <image> placeholder in each row by the N projected image tokens.
 
     Returns embeds (B, T-1+N, D), labels (B, T-1+N) with -100 on image slots, vis_mask (B, T-1+N) bool.
+
+    Worked example (one row, <image> = 7, N = 4):
+        input_ids = [12, 7, 9, 15, 11, 10]              T = 6
+        labels    = [-100, -100, -100, -100, 11, 10]    only the answer "11 10" is trained
+
+        position:  0     1    2    3    4    5    6    7    8
+        embeds:   e12 | v0   v1   v2   v3 | e9  e15  e11  e10      [9, D] = T - 1 + N
+        labels:   -100| -100 -100 -100 -100| -100 -100  11   10
+        vis_mask:  F  |  T    T    T    T  |  F    F    F    F
+
+    The same cut (:p | insert N | p+1:) is applied to embeds, labels and the mask, so every label
+    stays next to its token. DeepStack needs vis_mask: the high-res stacks are added at exactly
+    these positions (H[vis] += stack) before the chosen LM layers.
     """
-    B, T = input_ids.shape
-    N = image_tokens.shape[1]
+    B, T = input_ids.shape                      # e.g. 1, 6
+    N = image_tokens.shape[1]                   # e.g. 4   (image_tokens: [B, N, D] from the projector)
     rows_e, rows_l, rows_m = [], [], []
+    # row by row: each row may have its <image> at a different index, so no single slice works
     for b in range(B):
+        # where is the placeholder?  ids == 7 -> [F, T, F, F, F, F] -> flatnonzero -> [1] -> p = 1
         p = int(np.flatnonzero(input_ids[b] == image_token_id)[0])
+        # split around it, dropping the placeholder itself:  pre = [12],  post = [9, 15, 11, 10]
         pre, post = input_ids[b, :p], input_ids[b, p + 1:]
+        # what the LM sees: embed(pre) [1, D] + image vectors [4, D] + embed(post) [4, D] -> [9, D]
+        # (embed[7], the placeholder's own embedding, is never used)
         rows_e.append(np.concatenate([embed[pre], image_tokens[b], embed[post]]))
+        # same cut for labels; image slots get -100 so cross-entropy never asks the LM to predict pixels
         rows_l.append(np.concatenate([labels[b, :p], np.full(N, -100), labels[b, p + 1:]]))
+        # which positions are image: p False, N True, T-p-1 False  ->  [F, T, T, T, T, F, F, F, F]
         rows_m.append(np.concatenate([np.zeros(p, bool), np.ones(N, bool), np.zeros(T - p - 1, bool)]))
+    # every row grew by the same N - 1, so the rows stack back into a batch: [B, 9, D], [B, 9], [B, 9]
+    # positions are computed AFTER this (0..L-1), so text after the image sits at 5, not 2
     return np.stack(rows_e), np.stack(rows_l), np.stack(rows_m)
 
 

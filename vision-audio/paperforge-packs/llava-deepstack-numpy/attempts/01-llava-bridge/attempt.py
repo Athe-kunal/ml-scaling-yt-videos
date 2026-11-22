@@ -38,6 +38,7 @@ def silu(x):
 
 def _split(t, H):                                  # (B, N, D) -> (B, H, N, dh)
     B, N, D = t.shape
+    # (batch_size, sequence_len, num_heads, head_dim) where head_dim = D // num_heads
     return t.reshape(B, N, H, D // H).transpose(0, 2, 1, 3)
 
 
@@ -101,6 +102,7 @@ def vision_features(image, vt):
         hidden_states.append(x)                                      # hs[i] = output of block i
 
     f = hidden_states[SELECT_LAYER]        # penultimate block output; ln_post is NOT applied
+    # we will drop the CLS token
     return f[:, 1:]                        # select_feature='patch': drop CLS -> (B, N, Dv)
 
 
@@ -121,6 +123,8 @@ def merge_image_tokens(input_ids, image_token_id, embed, image_tokens, labels):
         p = int(np.flatnonzero(input_ids[b] == image_token_id)[0])
         pre, post = input_ids[b, :p], input_ids[b, p + 1:]
         rows_e.append(np.concatenate([embed[pre], image_tokens[b], embed[post]]))
+        # -100 is for prompt tokens -> prompt -> image tokens + text tokens
+        # you only calculate loss for the completion tokens, not the prompt tokens
         rows_l.append(np.concatenate([labels[b, :p], np.full(N, -100), labels[b, p + 1:]]))
         rows_m.append(np.concatenate([np.zeros(p, bool), np.ones(N, bool), np.zeros(T - p - 1, bool)]))
     return np.stack(rows_e), np.stack(rows_l), np.stack(rows_m)
@@ -139,9 +143,12 @@ def llava_forward(image, input_ids, labels, image_token_id, params):
     logits = rms_norm(x) @ params["lm"]["lm_head"]
 
     # next-token loss: position t predicts label t+1; image and prompt slots carry -100
-    lg, tgt = logits[:, :-1], lab[:, 1:]
-    keep = tgt != -100
+    # [s1,s2,s3] -> [s1] -> s2, [s1,s2] -> s3 so on
+    lg, tgt = logits[:, :-1], lab[:, 1:] #cross entropy loss
+    keep = tgt != -100 #ignore the prompt tokens
     lg = lg - lg.max(-1, keepdims=True)
     logp = lg - np.log(np.exp(lg).sum(-1, keepdims=True))
+    # torch.gather, you have the target ids as token ids
+    # [8,11,13]  
     nll = -np.take_along_axis(logp, np.where(keep, tgt, 0)[..., None], -1)[..., 0]
     return logits, float(nll[keep].mean())
