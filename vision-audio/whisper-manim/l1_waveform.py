@@ -15,6 +15,9 @@ class L1_Waveform(Lesson):
     NUM, TITLE, SUB = 1, "Waveforms & sampling", "from air pressure to numbers"
     SECTIONS = ["title", "sine_knobs", "the_melody", "sampling", "rate_vs_freq", "nyquist",
                 "quantize", "mono_resample", "pad_30s"]
+    TOPICS = {"sine_knobs": "a sine's three knobs", "the_melody": "our melody", "sampling": "sampling: dots in time",
+              "rate_vs_freq": "sample rate ≠ frequency", "nyquist": "Nyquist & aliasing",
+              "quantize": "bit depth: quantization", "mono_resample": "mono & resampling", "pad_30s": "pad to 30 s"}
 
     def prepare(self):
         y = dsp.melody()
@@ -36,7 +39,6 @@ class L1_Waveform(Lesson):
         for sym, trk, vals, word, col in [
             ("A", A, [1.15, 0.35, 0.8], "amplitude → loudness", GOLD),
             ("f", f, [6.0, 1.0, 3.0], "frequency → pitch", PINK),
-            (r"\varphi", ph, [PI, 2 * PI], "phase → where it starts", BLUE),
         ]:
             self.play(formula.select_part(sym).animate.set_color(col), run_time=0.4)
             self.say(word, col)
@@ -44,6 +46,27 @@ class L1_Waveform(Lesson):
                 self.play(trk.animate.set_value(v), run_time=1.0)
             self.beat()
             self.play(formula.select_part(sym).animate.set_color(INK), run_time=0.3)
+
+        # phase: keep the φ = 0 curve as "before", shift a copy to φ = π/2 ("after")
+        A0, f0 = A.get_value(), f.get_value()  # 0.8, 3 cycles
+        before = DashedVMobject(graph(ax, lambda t: A0 * np.sin(TAU * f0 * t), (0, 1), DIM, 3), num_dashes=90)
+        lab_b = T("before: φ = 0", 28, DIM)
+        lab_a = T("after: φ = π/2", 28, BLUE)
+        VGroup(lab_b, lab_a).arrange(DOWN, aligned_edge=LEFT, buff=0.15).next_to(ax, UP, buff=0.1).to_edge(RIGHT, buff=0.6)
+        self.play(formula.select_part(r"\varphi").animate.set_color(BLUE), run_time=0.4)
+        self.add(before)
+        self.play(FadeIn(lab_b))
+        self.say("phase → where it starts", BLUE)
+        self.beat()
+        self.play(ph.animate.set_value(PI / 2), FadeIn(lab_a), run_time=1.5)
+        # matching peaks: before at t = (1/4 + 1)/f, after a quarter cycle earlier at t = 1/f
+        tb, ta, yp = 1.25 / f0, 1.0 / f0, A0 + 0.22
+        arrow = Arrow(ax.c2p(tb, yp), ax.c2p(ta, yp), buff=0, stroke_color=BLUE, stroke_width=5)
+        pk = VGroup(Dot(ax.c2p(tb, A0), radius=0.08, fill_color=DIM), Dot(ax.c2p(ta, A0), radius=0.08, fill_color=BLUE))
+        dt = M(r"\Delta t = \frac{\varphi}{2\pi f} = \tfrac{1}{4}\ \text{cycle}", 38, BLUE).next_to(arrow, UP, buff=0.12)
+        self.play(FadeIn(pk), GrowArrow(arrow), Write(dt))
+        self.say("same wave, shifted in time", BLUE)
+        self.beat()
         self.clear_all()
 
     # ------------------------------------------------------------ the melody we use everywhere
@@ -57,7 +80,7 @@ class L1_Waveform(Lesson):
         self.play(ShowCreation(env), run_time=2.5, rate_func=linear)
         lbl = T("our melody · 8 notes · 4 s", 32, INK).next_to(ax, UP, buff=0.3)
         self.play(FadeIn(lbl))
-        self.say("the same clip all lecture")
+        self.say("audio clip")
         self.beat()
 
         # zoom into 20 ms of the first note: harmonics make the shape
@@ -128,35 +151,87 @@ class L1_Waveform(Lesson):
 
     # ------------------------------------------------------------ Nyquist / aliasing
     def nyquist(self):
-        n = 32
-        ax = axes(w=12, h=3.4, x=(0, n, 4), y=(-1.2, 1.2, 1)).shift(0.4 * UP)
-        f = ValueTracker(1000)
+        n = 16  # 1 ms of samples: few enough to see every dot
+        ax = axes(w=12, h=2.5, x=(0, n, 4), y=(-1.25, 1.25, 1)).shift(1.15 * UP)
+        f, vis = ValueTracker(2000), ValueTracker(1.0)
         t = np.linspace(0, n, 2400)
-        true = always_redraw(lambda: wave(ax, t, np.sin(TAU * f.get_value() * t / SR), ACCENT, 2.5))
-        dots = always_redraw(lambda: VGroup(*[Dot(ax.c2p(k, np.sin(TAU * f.get_value() * k / SR)), radius=0.06,
-                                                   fill_color=GOLD) for k in range(n + 1)]))
+        k = np.arange(n + 1)
 
-        def alias_f():
+        def alias():
             v = f.get_value() % SR
             return min(v, SR - v)
 
-        ghost = always_redraw(lambda: wave(
-            ax, t, np.sin(TAU * f.get_value() * 0 + TAU * alias_f() * t / SR) * (1 if (f.get_value() % SR) <= SR / 2 else -1),
-            PINK, 4.5).set_fill(opacity=0).set_stroke(opacity=0.0 if f.get_value() <= 8000 else 0.95))
-        readout = always_redraw(lambda: VGroup(
-            T("tone", 30, ACCENT), Text(f"{f.get_value():5.0f} Hz", font="Menlo", font_size=32, color=ACCENT),
-            T("dots look like", 30, PINK), Text(f"{alias_f():5.0f} Hz", font="Menlo", font_size=32, color=PINK),
-        ).arrange(RIGHT, buff=0.3).to_edge(UP, buff=0.5))
+        # cos, so 8 kHz gives clean ±1 dots, and the alias has no sign flip: cos(2π(sr−f)k/sr) = cos(2πfk/sr)
+        true = always_redraw(lambda: wave(ax, t, np.cos(TAU * f.get_value() * t / SR), ACCENT, 2.5)
+                             .set_stroke(opacity=vis.get_value()))
+        dots = always_redraw(lambda: VGroup(*[Dot(p, radius=0.075, fill_color=GOLD)
+                                                for p in c2p(ax, k, np.cos(TAU * f.get_value() * k / SR))]))
+        ghost = always_redraw(lambda: wave(ax, t, np.cos(TAU * alias() * t / SR), PINK, 4.5)
+                              .set_stroke(opacity=0.0 if f.get_value() <= SR / 2 + 1 else 0.95))
+
+        # readout rebuilt only when the rounded numbers change
+        def build_readout(fr):
+            parts = [T("tone", 30, ACCENT), Text(f"{fr:,.0f} Hz", font="Menlo", font_size=32, color=ACCENT),
+                     T("·", 30, DIM), Text(f"{SR / fr:.1f}", font="Menlo", font_size=32, color=GOLD), T("dots / cycle", 30, GOLD)]
+            return VGroup(*parts).arrange(RIGHT, buff=0.25).to_edge(UP, buff=0.35)
+
+        readout = build_readout(2000)
+        readout.key = 2000
+
+        def upd_readout(m):
+            key = round(f.get_value() / 100) * 100
+            if key != m.key:
+                m.key = key
+                m.set_submobjects(build_readout(key).submobjects)
+
+        readout.add_updater(upd_readout)
+
+        # frequency line 0 – 16 kHz, folding at 8 kHz
+        line = NumberLine(x_range=(0, SR, 2000), width=12, stroke_color=RULE, include_ticks=False).shift(1.05 * DOWN)
+        upper = Rectangle(width=6, height=0.36, stroke_width=0, fill_color=BAD, fill_opacity=0.12).move_to(line.n2p(12000))
+        ny_tick = Line(line.n2p(8000) + 0.3 * DOWN, line.n2p(8000) + 0.3 * UP, stroke_color=GOLD, stroke_width=3)
+        ticks = VGroup(T("0", 24, DIM).next_to(line.n2p(0), DOWN, buff=0.2),
+                       T("8 kHz", 24, GOLD).next_to(line.n2p(8000), DOWN, buff=0.35),
+                       T("16 kHz", 24, DIM).next_to(line.n2p(SR), DOWN, buff=0.2))
+        tone_mk = always_redraw(lambda: Triangle(fill_color=ACCENT, fill_opacity=1, stroke_width=0).scale(0.13)
+                                .rotate(PI).next_to(line.n2p(f.get_value()), UP, buff=0.05))
+        alias_mk = always_redraw(lambda: Triangle(fill_color=PINK, fill_opacity=1, stroke_width=0).scale(0.13)
+                                 .rotate(PI).next_to(line.n2p(alias()), UP, buff=0.05)
+                                 .set_opacity(0 if f.get_value() <= SR / 2 + 1 else 1))
+        fold = always_redraw(lambda: ArcBetweenPoints(line.n2p(f.get_value()) + 0.4 * UP, line.n2p(alias()) + 0.4 * UP,
+                                                      angle=0.6, stroke_color=PINK, stroke_width=2.5)
+                             .set_stroke(opacity=0 if f.get_value() <= SR / 2 + 50 else 0.9))
+
         self.play(ShowCreation(ax), ShowCreation(true), FadeIn(dots), FadeIn(readout))
-        self.say("raise the pitch, keep 16 000 dots / s")
-        self.play(f.animate.set_value(6000), run_time=3)
+        self.play(ShowCreation(line), FadeIn(upper), ShowCreation(ny_tick), FadeIn(ticks), FadeIn(tone_mk))
+        self.say("2 kHz: plenty of dots per cycle")
         self.beat()
-        self.add(ghost)
-        self.play(f.animate.set_value(15000), run_time=4)
-        self.say("above 8 kHz the dots lie: aliasing", PINK)
+
+        self.play(f.animate.set_value(8000), run_time=3)
+        self.say("8 kHz: just 2 dots per cycle", GOLD)
         self.beat()
-        ny = M(r"f_{\text{Nyquist}} = \frac{s_r}{2} = 8\,000\ \text{Hz}", 54, GOLD).next_to(ax, DOWN, buff=0.4)
-        self.play(Write(ny))
+
+        self.add(ghost, alias_mk)
+        self.play(f.animate.set_value(10000), run_time=2)
+        self.say("go past it: 10 kHz")
+        self.beat()
+        self.play(vis.animate.set_value(0.12), run_time=1)
+        self.say("hide the tone: dots trace 6 kHz", PINK)
+        self.beat()
+
+        self.add(fold)
+        fa = M(r"f_{\text{alias}} = 16\,000 - f", 44, PINK).next_to(line, DOWN, buff=0.95)
+        self.play(Write(fa), Indicate(alias_mk, color=PINK))
+        self.say("it folds back around 8 kHz", PINK)
+        self.beat()
+
+        self.play(vis.animate.set_value(0.6), run_time=0.5)
+        self.play(f.animate.set_value(15000), run_time=3)
+        self.say("15 kHz looks like 1 kHz", PINK)
+        self.beat()
+
+        ny = M(r"f_{\text{Nyquist}} = s_r / 2 = 8\,000\ \text{Hz}", 44, GOLD).move_to(fa)
+        self.play(FadeTransform(fa, ny))
         self.say("Whisper hears 0 – 8 kHz only")
         self.beat()
         self.clear_all()
@@ -248,25 +323,55 @@ class L1_Waveform(Lesson):
 
     # ------------------------------------------------------------ pad to 30 s
     def pad_30s(self):
-        y = dsp.melody()
-        bar = Rectangle(width=12.5, height=1.6, stroke_color=RULE).shift(0.5 * UP)
-        x0 = bar.get_left()[0]
-        w4 = 12.5 * 4 / 30
-        ax = axes(w=w4, h=1.5, x=(0, 4, 1), y=(-0.6, 0.6, 0.3)).move_to([x0 + w4 / 2, 0.5, 0])
-        env = envelope(ax, np.arange(len(y)) / SR, y, bins=300)
-        zeros = Rectangle(width=12.5 - w4, height=1.6, stroke_width=0, fill_color=RULE, fill_opacity=0.35)
-        zeros.move_to([x0 + w4 + (12.5 - w4) / 2, 0.5, 0])
-        self.play(ShowCreation(bar), ShowCreation(env))
-        t4 = tag("4 s · 64 000 samples", ACCENT, 26).next_to(ax, UP, buff=0.25)
-        self.play(FadeIn(t4))
-        self.say("Whisper always takes 30 s")
+        W, S = 12.0, 40  # timeline 0 – 40 s across 12 units
+        x0, y0 = -6.0, 0.55
+        sx = lambda sec: x0 + W * sec / S
+        box = Rectangle(width=sx(30) - x0, height=1.5, stroke_color=GOLD, stroke_width=3)
+        box.move_to([(x0 + sx(30)) / 2, y0, 0])
+        outside = Rectangle(width=sx(40) - sx(30), height=1.5, stroke_width=0, fill_color=RULE, fill_opacity=0.25)
+        outside.move_to([(sx(30) + sx(40)) / 2, y0, 0])
+        ticks = VGroup(*[T(f"{v} s", 24, GOLD if v == 30 else DIM).move_to([sx(v), y0 - 1.05, 0]) for v in (0, 10, 20, 30, 40)])
+        head = VGroup(T("Whisper's window", 32, GOLD), tag("30 s × 16 000 = 480 000 samples", GOLD, 28))
+        head.arrange(DOWN, buff=0.12).next_to(box, UP, buff=0.35)
+        self.play(ShowCreation(box), FadeIn(outside), FadeIn(ticks), FadeIn(head))
+        self.say("the input is always 30 s")
         self.beat()
-        self.play(GrowFromEdge(zeros, LEFT), run_time=1.2)
-        zt = T("zeros", 30, DIM).move_to(zeros)
-        b = Brace(bar, DOWN)
-        tot = tag("[480 000] = 30 s × 16 000", GOLD, 34).next_to(b, DOWN, buff=0.2)
-        self.play(FadeIn(zt), GrowFromCenter(b), Write(tot))
-        self.say("pad (or cut) to 480 000 samples")
+
+        # case 1: our 4 s melody → pad with zeros
+        y = dsp.melody()
+        ax = axes(w=sx(4) - x0, h=1.3, x=(0, 4, 1), y=(-0.6, 0.6, 0.3)).move_to([(x0 + sx(4)) / 2, y0, 0])
+        env = envelope(ax, np.arange(len(y)) / SR, y, bins=200)
+        b_real = Brace(Line([x0, 0, 0], [sx(4), 0, 0]), DOWN).move_to([(x0 + sx(4)) / 2, y0 - 1.55, 0])
+        t_real = tag("64 000 real", ACCENT, 24).next_to(b_real, DOWN, buff=0.08)
+        self.play(ShowCreation(env), GrowFromCenter(b_real), FadeIn(t_real))
+        self.say("our clip: only 4 s")
+        self.beat()
+        zeros = Rectangle(width=sx(30) - sx(4), height=1.5, stroke_width=0, fill_color=DIM, fill_opacity=0.25)
+        zeros.move_to([(sx(4) + sx(30)) / 2, y0, 0])
+        zt = T("zeros", 32, DIM).move_to(zeros)
+        b_zero = Brace(Line([sx(4), 0, 0], [sx(30), 0, 0]), DOWN).move_to([(sx(4) + sx(30)) / 2, y0 - 1.55, 0])
+        t_zero = tag("416 000 zeros", DIM, 24).next_to(b_zero, DOWN, buff=0.08)
+        eq = M(r"64\,000 + 416\,000 = 480\,000", 44, GOLD).move_to(2.35 * DOWN)
+        self.play(GrowFromEdge(zeros, LEFT), FadeIn(zt), GrowFromCenter(b_zero), FadeIn(t_zero), run_time=1.2)
+        self.play(Write(eq))
+        self.say("shorter → pad with zeros")
+        self.beat()
+
+        # case 2: a 40 s clip → keep the first 30 s
+        self.play(*[FadeOut(m) for m in (env, zeros, zt, b_real, t_real, b_zero, t_zero, eq)])
+        long = np.tile(y, 10)  # 40 s
+        ax40 = axes(w=sx(40) - x0, h=1.3, x=(0, 40, 10), y=(-0.6, 0.6, 0.3)).move_to([0, y0, 0])
+        env40 = envelope(ax40, np.arange(len(long)) / SR, long, bins=600, color=ACCENT)
+        cut = DashedLine([sx(30), y0 + 1.0, 0], [sx(30), y0 - 0.85, 0], stroke_color=BAD, stroke_width=4)
+        self.play(ShowCreation(env40), run_time=1.5)
+        self.say("a 40 s clip?")
+        self.beat()
+        tail = Rectangle(width=sx(40) - sx(30), height=1.5, stroke_width=0, fill_color=BAD, fill_opacity=0.3).move_to(outside)
+        ct = T("cut", 30, BAD).next_to(cut, UP, buff=0.1)
+        eq2 = M(r"\text{first } 30\text{ s} = 480\,000", 44, GOLD).move_to(2.35 * DOWN)
+        self.play(ShowCreation(cut), FadeIn(ct), FadeIn(tail))
+        self.play(Write(eq2))
+        self.say("longer → cut at 30 s", BAD)
         self.beat()
         self.clear_all()
 

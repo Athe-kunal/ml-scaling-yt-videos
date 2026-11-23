@@ -1,0 +1,7 @@
+**The big picture.** Whisper's decoder pulls in the audio with cross-attention. Here the audio *becomes part of the input sequence*. After `merge_audio_embeddings`, the LLM can't tell which rows came from text and which from audio, so everything downstream is plain causal LM decoding. The only invariant is: keep feeding those same embeddings.
+---
+**Qwen2-Audio.** `after_conv = (L−1)//2+1` and `after_pool = (after_conv−2)//2+1`. Mask *keys*: `pad = arange(T)[None] >= after_conv[:, None]`, then `mask = zeros.masked_fill(pad, -inf)[:, None, None, :]`. Pool with `self.avg_pooler(x.permute(0, 2, 1)).permute(0, 2, 1)` and apply the LN afterwards.
+---
+**AuT lengths.** `leave = L % 100` and `feat = (leave−1)//2+1`. Then `((feat−1)//2+1−1)//2+1 + (L//100)*13`. When `leave = 0`, the first term is 0. **Forward:** `x.permute(0, 3, 1, 2).reshape(N, t, c*f)`, then add `positional_embedding[:t]` (the same rows for every chunk). Then `x[arange(t)[None] < aut_output_lengths(chunk_lens)[:, None]]`.
+---
+**Windows.** For each audio with `n` tokens: `[W]*(n//W) + [n%W]` (if non-zero). Turn that into segment ids with `repeat_interleave`, then `mask = -inf where seg_i != seg_j`. **Generate:** `x = cat([x, lm.embed_tokens([[nxt]])], 1)`. **Qwen3-Omni pipeline:** there is no projector (`proj2` already outputs the Thinker width) and no trimming (the AuT output is already packed with only the real tokens).

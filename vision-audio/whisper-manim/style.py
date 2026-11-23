@@ -26,7 +26,7 @@ CACHE.mkdir(parents=True, exist_ok=True)
 
 def T(s, size=34, color=INK, **kw):
     """Plain label (keep ≤ 6 words)."""
-    return Text(s, font=FONT, font_size=size, color=color, **kw)
+    return Text(s, font=FONT, font_size=size, **kw).set_color(color)  # Text ignores color= here
 
 
 def M(s, size=40, color=INK, **kw):
@@ -36,7 +36,7 @@ def M(s, size=40, color=INK, **kw):
 
 def tag(s, color=GOLD, size=26):
     """Tensor shape written on a diagram, e.g. [80, 3000]."""
-    return Text(s, font="Menlo", font_size=size, color=color)
+    return Text(s, font="Menlo", font_size=size).set_color(color)
 
 
 def polyline(points, color=ACCENT, width=2.5):
@@ -154,6 +154,8 @@ class Lesson(Slide):
     skip_reversing = True  # reversed clips only serve the V key; ← replays the previous beat forward
     NUM, TITLE, SUB = 0, "", ""
     SECTIONS: list = []
+    TOPICS: dict = {}          # section → short label for the roadmap slide
+    ALL_SECTIONS = None        # set on per-section scenes so the roadmap still shows the whole lesson
 
     def setup(self):
         super().setup()
@@ -167,7 +169,28 @@ class Lesson(Slide):
     def construct(self):
         self.prepare()
         for name in self.SECTIONS:
+            if name in self.TOPICS:
+                self.roadmap(name)
             getattr(self, name)()
+
+    def roadmap(self, current):
+        """Where we are in the lesson: done topics dim, the next one highlighted."""
+        order = [s for s in (self.ALL_SECTIONS or self.SECTIONS) if s in self.TOPICS]
+        idx = order.index(current)
+        head = T(f"{self.NUM} · {self.TITLE}", 34, DIM)
+        rows = VGroup()
+        for i, s in enumerate(order):
+            col = ACCENT if i == idx else (RULE if i < idx else SOFT)
+            num = tag(f"{i + 1}", col, 32)
+            rows.add(VGroup(num, T(self.TOPICS[s], 42 if i == idx else 36, col)).arrange(RIGHT, buff=0.4))
+        rows.arrange(DOWN, aligned_edge=LEFT, buff=0.2)
+        VGroup(head, rows).arrange(DOWN, buff=0.45).move_to(0.15 * DOWN)
+        head.align_to(rows, LEFT)
+        box = SurroundingRectangle(rows[idx], stroke_color=ACCENT, buff=0.14, fill_color=ACCENT, fill_opacity=0.08)
+        self.play(FadeIn(head), LaggedStartMap(FadeIn, rows, shift=0.15 * RIGHT, lag_ratio=0.06), run_time=0.9)
+        self.play(ShowCreation(box), run_time=0.4)
+        self.beat()
+        self.clear_all()
 
     # ------------------------------------------------------------ lazy beat / clear
     def _flush(self):
@@ -201,6 +224,14 @@ class Lesson(Slide):
             super().play(*[FadeOut(m) for m in mobs], run_time=0.6)
         if self.caption not in keep:
             self.caption = None
+
+    def fade_in_live(self, *mobs, **kw):
+        """FadeIn for mobjects with updaters (always_redraw, live numbers): fade a frozen
+        snapshot, then swap in the live one (a fade can't follow changing geometry)."""
+        snaps = [m.copy().clear_updaters() for m in mobs]
+        self.play(*[FadeIn(s) for s in snaps], **kw)
+        self.remove(*snaps)
+        self.add(*mobs)
 
     # ------------------------------------------------------------ building blocks
     def title(self):
@@ -254,4 +285,4 @@ def split_sections(lesson, namespace):
     """Add one scene per section, e.g. L2_Fourier_02_probe, to the lesson's module."""
     for i, name in enumerate(lesson.SECTIONS):
         cls_name = section_scene_name(lesson, i, name)
-        namespace[cls_name] = type(cls_name, (lesson,), {"SECTIONS": [name], "__module__": lesson.__module__})
+        namespace[cls_name] = type(cls_name, (lesson,), {"SECTIONS": [name], "ALL_SECTIONS": lesson.SECTIONS, "__module__": lesson.__module__})

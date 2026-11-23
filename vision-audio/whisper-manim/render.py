@@ -55,8 +55,13 @@ def sections():
 def render_one(mod_name, scene, quality):
     shutil.rmtree(HERE / "videos" / scene, ignore_errors=True)  # stale *_temp.mp4 breaks manim-slides
     t0 = time.time()
+    # own temp dir per process: ManimGL writes text SVGs to <tmp>/<hash>.svg and deletes them, so
+    # parallel renders of the same label (e.g. the roadmap) would otherwise delete each other's files
+    tmp = HERE / "media" / "tmp" / scene
+    tmp.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "TMPDIR": str(tmp)}
     p = subprocess.run([str(BIN), "render", "--GL", f"{mod_name}.py", scene, quality],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=env)
     log = (p.stdout + p.stderr).replace("\r", "\n")
     warn = [l for l in log.splitlines() if l.startswith("SAFE-AREA")]
     ok = p.returncode == 0 and (HERE / "slides" / f"{scene}.json").exists()

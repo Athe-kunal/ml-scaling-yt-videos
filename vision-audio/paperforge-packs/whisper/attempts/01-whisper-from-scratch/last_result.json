@@ -1,0 +1,145 @@
+{
+  "tests": [
+    {
+      "name": "test_pad_or_trim_pads_right_and_trims_tail",
+      "status": "passed",
+      "message": "",
+      "duration": 0.01
+    },
+    {
+      "name": "test_thirty_seconds_give_exactly_3000_frames",
+      "status": "passed",
+      "message": "",
+      "duration": 0.025
+    },
+    {
+      "name": "test_log_mel_matches_explicit_reference[16000-0]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.139
+    },
+    {
+      "name": "test_log_mel_matches_explicit_reference[8160-1]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.001
+    },
+    {
+      "name": "test_log_mel_matches_explicit_reference[3999-2]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.001
+    },
+    {
+      "name": "test_dynamic_range_clamp_is_global_not_per_frame",
+      "status": "passed",
+      "message": "",
+      "duration": 0.001
+    },
+    {
+      "name": "test_sinusoids_match_reference[5-8]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.002
+    },
+    {
+      "name": "test_sinusoids_match_reference[11-6]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.0
+    },
+    {
+      "name": "test_sinusoids_match_reference[3-4]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.0
+    },
+    {
+      "name": "test_state_dict_names_and_shapes_match_whisper",
+      "status": "passed",
+      "message": "",
+      "duration": 0.009
+    },
+    {
+      "name": "test_attention_returns_raw_scaled_scores",
+      "status": "passed",
+      "message": "",
+      "duration": 0.008
+    },
+    {
+      "name": "test_encoder_matches_reference[1-0]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.009
+    },
+    {
+      "name": "test_encoder_matches_reference[3-5]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.006
+    },
+    {
+      "name": "test_encoder_rejects_wrong_length",
+      "status": "passed",
+      "message": "",
+      "duration": 0.003
+    },
+    {
+      "name": "test_decoder_matches_reference[1-0]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.007
+    },
+    {
+      "name": "test_decoder_matches_reference[4-1]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.006
+    },
+    {
+      "name": "test_decoder_matches_reference[7-2]",
+      "status": "passed",
+      "message": "",
+      "duration": 0.007
+    },
+    {
+      "name": "test_decoder_is_causal_but_sees_all_audio",
+      "status": "passed",
+      "message": "",
+      "duration": 0.008
+    },
+    {
+      "name": "test_logits_use_the_tied_embedding",
+      "status": "passed",
+      "message": "",
+      "duration": 0.007
+    },
+    {
+      "name": "test_whisper_forward_is_decoder_of_encoder",
+      "status": "passed",
+      "message": "",
+      "duration": 0.007
+    },
+    {
+      "name": "test_greedy_decode_scripted",
+      "status": "passed",
+      "message": "",
+      "duration": 0.003
+    },
+    {
+      "name": "test_greedy_decode_matches_full_model_reference",
+      "status": "passed",
+      "message": "",
+      "duration": 0.02
+    }
+  ],
+  "passed": 22,
+  "total": 22,
+  "all_passed": true,
+  "timed_out": false,
+  "exit_code": 0,
+  "duration": 2.331,
+  "stdout": "......................                                                   [100%]\n22 passed in 1.70s\n",
+  "stderr": "",
+  "timestamp": "2026-11-22T16:21:36"
+}

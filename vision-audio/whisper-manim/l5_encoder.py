@@ -40,6 +40,9 @@ def toy_stem(mel):
 class L5_Encoder(Lesson):
     NUM, TITLE, SUB = 5, "Whisper's audio encoder", "log-mel → 1500 audio tokens"
     SECTIONS = ["title", "overview", "conv1", "conv2", "positions", "blocks", "decoder", "training", "summary"]
+    TOPICS = {"overview": "encoder + decoder", "conv1": "conv1: 80 → 384", "conv2": "conv2: stride 2",
+              "positions": "sinusoidal positions", "blocks": "Transformer blocks", "decoder": "the decoder, briefly",
+              "training": "how the encoder learns", "summary": "the whole path"}
 
     def prepare(self):
         self.mel = dsp.whisper_input()["scaled"]

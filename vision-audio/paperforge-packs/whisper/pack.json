@@ -1,0 +1,66 @@
+{
+  "id": "whisper",
+  "title": "Whisper from scratch, then Qwen2-Audio & Qwen3-Omni",
+  "paper": {
+    "title": "Robust Speech Recognition via Large-Scale Weak Supervision",
+    "authors": [
+      "Alec Radford",
+      "Jong Wook Kim",
+      "Tao Xu",
+      "Greg Brockman",
+      "Christine McLeavey",
+      "Ilya Sutskever"
+    ],
+    "arxiv": "2212.04356",
+    "pdf": "paper.pdf",
+    "code": "https://github.com/openai/whisper"
+  },
+  "summary": "One problem that rebuilds the core of openai/whisper in PyTorch with the real parameter names: the log-Mel front end of audio.py (power STFT, drop the last frame, log10, global 8-decade clamp, (x+4)/4, checked against Whisper's own mel_filters.npz), the model.py encoder (conv stem with stride 2 on conv2, concatenated sinusoids, attention with no key bias and d^-1/4 on q and k, pre-LN blocks, ln_post), the decoder (causal self-attention, unmasked cross-attention, tied output embedding), and a greedy decoding loop with EOT handling. No training. The full Whisper source is in refs/whisper-src. Problem 02 shows how audio LLMs use such an encoder differently: Qwen2-Audio (Whisper-large-v3 encoder + stride-2 average pool + linear projector) and Qwen3-Omni's AuT (1 s chunks, 3x Conv2d to 12.5 Hz, per-chunk positions, windowed attention) both splice their features into <|AUDIO|> placeholder slots of a decoder-only LLM via masked_scatter, instead of Whisper's cross-attention. Qwen papers and HF code are in refs/qwen.",
+  "depends_on": [],
+  "created": "2026-11-19",
+  "status": "ready",
+  "problems": [
+    {
+      "id": "01-whisper-from-scratch",
+      "title": "Whisper from scratch: log-Mel, encoder, decoder, greedy decode",
+      "difficulty": "hard",
+      "runtime": "torch",
+      "concepts": [
+        "log-Mel: power, drop last frame, log10, global max-8 clamp, (x+4)/4",
+        "conv stem: 3000 frames -> 1500 tokens",
+        "sin|cos sinusoids",
+        "no key bias, d^-1/4 on q and k",
+        "self -> cross -> MLP, tied logits",
+        "greedy decode with EOT"
+      ],
+      "paper_refs": [
+        "\u00a72.2",
+        "Fig. 1",
+        "audio.py",
+        "model.py",
+        "decoding.py GreedyDecoder"
+      ],
+      "milestone": "Whisper basics"
+    },
+    {
+      "id": "02-audio-llm-bridge",
+      "title": "Qwen2-Audio & Qwen3-Omni: how the audio encoder feeds a decoder-only LLM",
+      "difficulty": "hard",
+      "runtime": "torch",
+      "concepts": [
+        "Whisper encoder + AvgPool(2) + projector (40 ms/token)",
+        "valid-length arithmetic & key padding mask",
+        "AuT: 1 s chunks, 3x Conv2d -> 13 tokens (12.5 Hz)",
+        "per-chunk positions, windowed attention",
+        "<|AUDIO|> placeholder expansion + masked_scatter",
+        "decoding from inputs_embeds"
+      ],
+      "paper_refs": [
+        "Qwen2-Audio \u00a72",
+        "Qwen3-Omni \u00a72.2",
+        "Qwen3-Omni \u00a72.4"
+      ],
+      "milestone": "Audio LLMs"
+    }
+  ]
+}

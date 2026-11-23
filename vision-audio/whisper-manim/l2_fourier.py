@@ -25,14 +25,29 @@ def stft_generic(y, n_fft, hop):
     return np.abs(np.fft.rfft(yp[idx] * w, axis=1).T) ** 2
 
 
+def area_fill(ax, t, prod, step=3):
+    """Product curve with + area gold and − area blue."""
+    tt, pp = t[::step], prod[::step]
+    xs = np.concatenate([[tt[0]], tt, [tt[-1]]])
+    pos = c2p(ax, xs, np.concatenate([[0], np.maximum(pp, 0), [0]]))
+    neg = c2p(ax, xs, np.concatenate([[0], np.minimum(pp, 0), [0]]))
+    return VGroup(Polygon(*pos, stroke_width=0, fill_color=GOLD, fill_opacity=0.55),
+                  Polygon(*neg, stroke_width=0, fill_color=BLUE, fill_opacity=0.55),
+                  wave(ax, t, prod, GOLD, 2))
+
+
 def db(p):
     return 10 * np.log10(p + 1e-10)
 
 
 class L2_Fourier(Lesson):
     NUM, TITLE, SUB = 2, "Fourier → STFT", "which frequencies are inside?"
-    SECTIONS = ["title", "decompose", "probe", "winding", "dft", "framing", "leakage",
+    SECTIONS = ["title", "decompose", "probe", "phase", "winding", "dft", "framing", "leakage",
                 "frame_count", "stft", "tradeoff"]
+    TOPICS = {"decompose": "a note = a sum of sines", "probe": "probe sine: multiply & sum", "phase": "unknown phase: two probes",
+              "winding": "winding: the Fourier transform", "dft": "the DFT: 400 → 201 bins", "framing": "frames & hop",
+              "leakage": "leakage & the Hann window", "frame_count": "how many frames: 3000",
+              "stft": "STFT → spectrogram", "tradeoff": "window size trade-off"}
 
     # ------------------------------------------------------------ a note = sum of sines
     def decompose(self):
@@ -117,28 +132,87 @@ class L2_Fourier(Lesson):
         self.say("big area ⇒ that frequency is inside", GOLD)
         self.play(f.animate.set_value(950), run_time=7, rate_func=linear)
         self.beat()
-        # phase problem: the same 262 Hz tone shifted by 90° gives zero area
-        self.say("but shift the phase…", PINK)
         self.clear_all()
-        self.phase_problem()
 
-    def phase_problem(self):
-        dur = 0.025
-        t = np.linspace(0, dur, 1200)
-        ax = axes(w=11, h=2.2, x=(0, dur, dur / 5), y=(-1.2, 1.2, 1)).to_edge(UP, buff=0.5)
-        g = np.cos(TAU * F0 * t)  # same tone, 90° later
-        p = np.sin(TAU * F0 * t)
-        self.play(ShowCreation(ax), ShowCreation(wave(ax, t, g, INK, 3)), ShowCreation(wave(ax, t, p, PINK, 2.5)))
-        val = M(r"\int \cos \cdot \sin\,dt \approx 0", 50, BAD).next_to(ax, DOWN, buff=0.4)
-        self.play(Write(val))
-        self.say("right frequency, zero area")
+    # ------------------------------------------------------------ the signal's phase is unknown → two probes
+    def phase(self):
+        cyc = 6
+        dur = cyc / F0  # whole cycles, so the cross terms cancel exactly
+        t = np.linspace(0, dur, 1500)
+        ph = ValueTracker(0.0)  # the SIGNAL's phase (unknown in real audio)
+        show_cos = ValueTracker(0.0)
+
+        def sig():
+            return np.sin(TAU * F0 * t + ph.get_value())
+
+        def area(probe):  # mean of signal·probe, ×2 → 1 when they line up
+            return 2 * float(np.mean(sig() * probe))
+
+        p_sin, p_cos = np.sin(TAU * F0 * t), np.cos(TAU * F0 * t)
+
+        ax_s = axes(w=12, h=1.15, x=(0, dur, dur / 6), y=(-1.2, 1.2, 1)).to_edge(UP, buff=0.75)
+        cols = []
+        for x, col, name, probe in [(-3.35, PINK, "probe 1: sin", p_sin), (3.35, BLUE, "probe 2: cos", p_cos)]:
+            ax_p = axes(w=5.6, h=0.95, x=(0, dur, dur / 6), y=(-1.2, 1.2, 1)).move_to([x, 0.75, 0])
+            ax_m = axes(w=5.6, h=1.15, x=(0, dur, dur / 6), y=(-1.2, 1.2, 1)).move_to([x, -0.75, 0])
+            lab = T(name, 28, col).next_to(ax_p, UP, buff=0.08)
+            cp = wave(ax_p, t, probe, col, 2.5)
+            prod = always_redraw(lambda ax_m=ax_m, probe=probe: area_fill(ax_m, t, sig() * probe))
+            num = DecimalNumber(1.0, num_decimal_places=2, font_size=34, color=GOLD)
+            num.add_updater(lambda m, probe=probe: m.set_value(round(area(probe), 2) + 0.0))  # no "−0.00" flicker
+            ar = VGroup(T("area", 28, GOLD), num).arrange(RIGHT, buff=0.2).next_to(ax_m, DOWN, buff=0.15)
+            cols.append(VGroup(ax_p, ax_m, lab, cp, prod, ar))
+
+        cs = always_redraw(lambda: wave(ax_s, t, sig(), INK, 3))
+        deg = DecimalNumber(0, num_decimal_places=0, font_size=32, color=INK)
+        deg.add_updater(lambda m: m.set_value(round(np.degrees(ph.get_value())) % 360))
+        sl = VGroup(T("signal · phase", 28, INK), deg, T("°", 28, INK)).arrange(RIGHT, buff=0.12)
+        sl.next_to(ax_s, UP, buff=0.08).align_to(ax_s, LEFT)
+
+        self.play(ShowCreation(ax_s))
+        self.fade_in_live(cs, sl)
+        self.fade_in_live(*cols[0])
+        self.say("signal lines up with probe: big area")
         self.beat()
-        fix = VGroup(M(r"\text{probe with }\cos\text{ and }\sin", 46),
-                     M(r"e^{-i2\pi f t} = \cos(2\pi f t) - i \sin(2\pi f t)", 52, ACCENT)).arrange(DOWN, buff=0.4)
-        fix.next_to(ax, DOWN, buff=0.4)
-        self.play(FadeOut(val), FadeIn(fix[0]))
-        self.play(Write(fix[1]))
-        self.say("use both at once: a complex probe")
+
+        self.play(ph.animate.set_value(PI / 2), run_time=2)
+        self.say("shift the SIGNAL 90°: area 0", BAD)
+        self.beat()
+
+        self.fade_in_live(*cols[1])
+        self.say("a second probe, cos, catches it", BLUE)
+        self.beat()
+
+        self.play(ph.animate.set_value(PI / 2 + TAU + PI / 3), run_time=6, rate_func=linear)  # stop at 150°: both areas ≠ 0
+        self.say("any phase: the two areas trade off")
+        self.beat()
+
+        # the two areas as one point: (sin-area, cos-area) runs round a circle of radius 1
+        for c in cols:
+            for m in c:
+                m.clear_updaters()
+        self.play(*[FadeOut(m) for c in cols for m in c], run_time=0.6)
+        plane = NumberPlane(x_range=(-1.4, 1.4, 1), y_range=(-1.4, 1.4, 1), width=3.6, height=3.6,
+                            background_line_style=dict(stroke_color=RULE, stroke_width=1, stroke_opacity=0.6),
+                            axis_config=dict(stroke_color=DIM)).move_to(2.6 * LEFT + 0.65 * DOWN)
+        xl = T("sin area", 24, PINK).next_to(plane, DOWN, buff=0.1)
+        yl = T("cos area", 24, BLUE).next_to(plane, LEFT, buff=0.1)
+        ring = Circle(radius=plane.c2p(1, 0)[0] - plane.c2p(0, 0)[0], stroke_color=RULE).move_to(plane.c2p(0, 0))
+        pt = always_redraw(lambda: Dot(plane.c2p(area(p_sin), area(p_cos)), radius=0.1, fill_color=GOLD))
+        arm = always_redraw(lambda: Line(plane.c2p(0, 0), plane.c2p(area(p_sin), area(p_cos)), stroke_color=GOLD, stroke_width=3))
+        self.play(ShowCreation(plane), FadeIn(xl), FadeIn(yl), ShowCreation(ring))
+        self.fade_in_live(arm, pt)
+        txt = VGroup(T("length = how much", 32, GOLD), T("angle = the phase", 32, INK)).arrange(DOWN, aligned_edge=LEFT, buff=0.25)
+        txt.next_to(plane, RIGHT, buff=1.0)
+        self.play(FadeIn(txt))
+        self.play(ph.animate.set_value(PI / 2 + 2 * TAU + PI / 3), run_time=5, rate_func=linear)
+        self.say("same length for any phase")
+        self.beat()
+
+        fx = M(r"e^{-i2\pi f t} = \cos(2\pi f t) - i \sin(2\pi f t)", 40, ACCENT).next_to(txt, DOWN, buff=0.6)
+        fx.to_edge(RIGHT, buff=0.4)
+        self.play(Write(fx))
+        self.say("both probes in one: a complex probe")
         self.beat()
         self.clear_all()
 

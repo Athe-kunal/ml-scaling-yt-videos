@@ -18,6 +18,8 @@ def plain_axes(x, y, w, h):
 class L3_LogMel(Lesson):
     NUM, TITLE, SUB = 3, "Mel → log-mel", "how ears hear pitch"
     SECTIONS = ["title", "start_power", "pitch_is_log", "mel_curve", "filterbank", "matmul", "log_steps"]
+    TOPICS = {"start_power": "the power spectrogram", "pitch_is_log": "pitch is logarithmic", "mel_curve": "the mel scale",
+              "filterbank": "building the mel filterbank", "matmul": "filters @ power", "log_steps": "log, floor, scale"}
 
     def prepare(self):
         self.A = dsp.whisper_input()
