@@ -32,6 +32,7 @@ def log_mel_spectrogram(audio: torch.Tensor, filters: torch.Tensor) -> torch.Ten
 
     power = stft[..., :-1].abs() ** 2                       # drop last frame, |X|^2
     mel = filters @ power                                   # (..., 80, 3000)
+    # silence padding
     log_spec = torch.clamp(mel, min=1e-10).log10()
     log_spec = torch.maximum(log_spec, log_spec.max() - 8.0)  # global max, not per frame
     return (log_spec + 4.0) / 4.0
@@ -66,31 +67,45 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, n_state: int, n_head: int):
         super().__init__()
         self.n_head = n_head
+        # n_state, n_state
         self.query = nn.Linear(n_state, n_state)
         self.key = nn.Linear(n_state, n_state, bias=False)
         self.value = nn.Linear(n_state, n_state)
         self.out = nn.Linear(n_state, n_state)
 
     def forward(self, x, xa=None, mask=None):
-        q = self.query(x)
+        # dh = n_state // self.n_head
+        # Wq or self.query -> (n_state, n_state) -> (n_state, num_heads, n_state // num_heads)
+        # x -> batch_size, seq_len, n_state
+        q = self.query(x) # x @ self.query -> (batch_size, seq_len, n_state)
+        # (batch_size, seq_len, n_state) -> (batch_size, seq_len,num_heads, n_state // num_heads)
         src = x if xa is None else xa
         k = self.key(src)
+        # (batch_size, seq_len, n_state) -> (batch_size, seq_len,num_heads, n_state // num_heads)
         v = self.value(src)
+        # (batch_size, seq_len, n_state) -> (batch_size, seq_len,num_heads, n_state // num_heads)
         B, Tq, D = q.shape
         Tk = k.shape[1]
         H = self.n_head
-
+        # q (batch_size, seq_len, n_state) -> (batch_size, seq_len, num_heads, n_state // num_heads)
+        # q.permute -> (batch_size, num_heads, seq_len, n_state // num_heads)
+        # head is the parallel dimension
         q = q.view(B, Tq, H, D // H).permute(0, 2, 1, 3)   # (B, H, Tq, d)
+        # k -> (batch_size, num_heads, seq_len, n_state // num_heads)
         k = k.view(B, Tk, H, D // H).permute(0, 2, 1, 3)
+        # v -> (batch_size, num_heads, seq_len, n_state // num_heads)
         v = v.view(B, Tk, H, D // H).permute(0, 2, 1, 3)
 
         scale = (D // H) ** -0.25
-        qk = (q * scale) @ (k * scale).transpose(-1, -2)    # (B, H, Tq, Tk)
+        # k -> (batch_size, num_heads, seq_len, n_state // num_heads) -> 
+        # (batch_size, num_heads,n_state // num_heads, seq_len) 
+        qk = (q * scale) @ k.transpose(-1, -2)    # (B, H, Tq, Tk)
         if mask is not None:
             qk = qk + mask[:Tq, :Tq]
         w = F.softmax(qk, dim=-1)
+        # w @ v -> (B, H, Tq, n_states // num_heads) -> (B, Tq, H, n_states // num_heads) -> (B,Tq,D)
         out = (w @ v).permute(0, 2, 1, 3).reshape(B, Tq, D)
-        return self.out(out), qk.detach()
+        return self.out(out), qk.detach() #this will be used for cross-attention
 
 
 class ResidualAttentionBlock(nn.Module):
@@ -98,6 +113,7 @@ class ResidualAttentionBlock(nn.Module):
         super().__init__()
         self.attn = MultiHeadAttention(n_state, n_head)
         self.attn_ln = nn.LayerNorm(n_state)
+        # interaction between audio and text tokens
         self.cross_attn = MultiHeadAttention(n_state, n_head) if cross_attention else None
         self.cross_attn_ln = nn.LayerNorm(n_state) if cross_attention else None
         n_mlp = n_state * 4
@@ -117,6 +133,7 @@ class AudioEncoder(nn.Module):
         super().__init__()
         self.conv1 = nn.Conv1d(n_mels, n_state, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(n_state, n_state, kernel_size=3, stride=2, padding=1)
+        # sinusoidal embeddings
         self.register_buffer("positional_embedding", sinusoids(n_ctx, n_state))
         self.blocks = nn.ModuleList([ResidualAttentionBlock(n_state, n_head) for _ in range(n_layer)])
         self.ln_post = nn.LayerNorm(n_state)
@@ -124,6 +141,8 @@ class AudioEncoder(nn.Module):
     def forward(self, mel):
         x = F.gelu(self.conv1(mel))
         x = F.gelu(self.conv2(x))
+        # x -> B,D,T -> B,T,D where T is the sequencelength (30 second audio clip)
+        # D -> d_model
         x = x.permute(0, 2, 1)                                   # (B, T, D)
         assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
         x = x + self.positional_embedding
@@ -145,7 +164,9 @@ class TextDecoder(nn.Module):
         self.register_buffer("mask", mask, persistent=False)
 
     def forward(self, tokens, xa):
+        # xa are the audio tokens
         T = tokens.shape[-1]
+        # token_embedding -> token_ids -> d_model 
         x = self.token_embedding(tokens) + self.positional_embedding[:T]
         for block in self.blocks:
             x = block(x, xa, mask=self.mask)
@@ -163,6 +184,7 @@ class Whisper(nn.Module):
                                    dims.n_text_head, dims.n_text_layer)
 
     def forward(self, mel, tokens):
+        # mel spectogram
         return self.decoder(tokens, self.encoder(mel))
 
 

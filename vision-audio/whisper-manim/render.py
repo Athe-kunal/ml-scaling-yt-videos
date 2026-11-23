@@ -27,7 +27,8 @@ os.chdir(HERE)
 sys.path.insert(0, str(HERE))
 
 LESSONS = [("l1_waveform", "L1_Waveform"), ("l2_fourier", "L2_Fourier"),
-           ("l3_logmel", "L3_LogMel"), ("l5_encoder", "L5_Encoder")]
+           ("l3_logmel", "L3_LogMel"), ("l5_encoder", "L5_Encoder"),
+           ("l6_bridge", "L6_AudioToLLM"), ("l7_qwen2audio", "L7_Qwen2Audio")]
 STAMPS = HERE / "slides" / ".stamps"
 BIN = Path(sys.executable).parent / "manim-slides"
 
@@ -76,6 +77,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 4))
     ap.add_argument("--present", action="store_true")
     ap.add_argument("--html", action="store_true")
+    ap.add_argument("--no-open", action="store_true", help="with --html: write the page but don't open it")
     ap.add_argument("--force", action="store_true", help="re-render even if unchanged")
     a = ap.parse_args()
     sys.argv = sys.argv[:1]  # manimlib parses sys.argv when the lessons import it
@@ -118,7 +120,22 @@ def main():
     if a.present:
         subprocess.run([str(BIN), "present", *scenes, "--full-screen", "--aspect-ratio", "keep"])
     if a.html:
-        subprocess.run([str(BIN), "convert", *scenes, "slides/lectures.html", "--open"])
+        import webbrowser
+        from sidebar import inject
+        from style import section_scene_name
+        out = HERE / "slides" / "lectures.html"
+        subprocess.run([str(BIN), "convert", *scenes, str(out)], check=True)
+        entries = []  # sidebar: one heading per lesson, one link per subtopic (its roadmap beat)
+        for mod_name, cls_name in LESSONS:
+            lesson = getattr(importlib.import_module(mod_name), cls_name)
+            sc = [(section_scene_name(lesson, i, s), lesson.TOPICS.get(s)) for i, s in enumerate(lesson.SECTIONS)]
+            sc = [x for x in sc if x[0] in scenes]
+            if sc:
+                entries.append((f"{lesson.NUM} · {lesson.TITLE}", sc))
+        inject(out, entries, HERE / "slides")
+        print(f"wrote {out}", flush=True)
+        if not a.no_open:
+            webbrowser.open(out.as_uri())
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ PINK = "#FF8AC6"
 GOLD = "#FFC94D"
 BLUE = "#8DB4FF"
 BAD = "#FF8A8A"
+GREEN = "#8BE48B"   # "added" in architecture morphs
 
 FONT = "Helvetica Neue"
 SAFE_X, SAFE_Y = FRAME_X_RADIUS - 0.1, FRAME_Y_RADIUS - 0.05  # stay inside the rendered frame
@@ -138,6 +139,22 @@ def block(label, w=3.2, h=0.9, color=ACCENT, size=26, sub=None):
     else:
         txt.move_to(box)
     return g
+
+
+def chip(text, color=PINK, size=20, h=0.5, min_w=0.6, fill=0.15):
+    """A token chip: rounded box with monospace text (e.g. <|AUDIO|>, ' And')."""
+    t = tag(text, INK, size)
+    box = RoundedRectangle(width=max(min_w, t.get_width() + 0.25), height=h, corner_radius=0.08,
+                           stroke_color=color, stroke_width=2, fill_color=color, fill_opacity=fill)
+    t.move_to(box)
+    return VGroup(box, t)
+
+
+def vec_rows(values, w=0.34, h=0.34, name="rows"):
+    """A column of feature vectors drawn as small heat squares (one per row)."""
+    v = np.asarray(values, np.float64)
+    cols = colormap((v - v.min()) / max(v.max() - v.min(), 1e-9))
+    return VGroup(*[Square(w, stroke_color=BG, stroke_width=1, fill_color=rgb_to_hex(c), fill_opacity=1) for c in cols])
 
 
 class Lesson(Slide):

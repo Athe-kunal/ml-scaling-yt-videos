@@ -15,7 +15,7 @@
     "pdf": "paper.pdf",
     "code": "https://github.com/openai/whisper"
   },
-  "summary": "One problem that rebuilds the core of openai/whisper in PyTorch with the real parameter names: the log-Mel front end of audio.py (power STFT, drop the last frame, log10, global 8-decade clamp, (x+4)/4, checked against Whisper's own mel_filters.npz), the model.py encoder (conv stem with stride 2 on conv2, concatenated sinusoids, attention with no key bias and d^-1/4 on q and k, pre-LN blocks, ln_post), the decoder (causal self-attention, unmasked cross-attention, tied output embedding), and a greedy decoding loop with EOT handling. No training. The full Whisper source is in refs/whisper-src. Problem 02 shows how audio LLMs use such an encoder differently: Qwen2-Audio (Whisper-large-v3 encoder + stride-2 average pool + linear projector) and Qwen3-Omni's AuT (1 s chunks, 3x Conv2d to 12.5 Hz, per-chunk positions, windowed attention) both splice their features into <|AUDIO|> placeholder slots of a decoder-only LLM via masked_scatter, instead of Whisper's cross-attention. Qwen papers and HF code are in refs/qwen.",
+  "summary": "One problem that rebuilds the core of openai/whisper in PyTorch with the real parameter names: the log-Mel front end of audio.py (power STFT, drop the last frame, log10, global 8-decade clamp, (x+4)/4, checked against Whisper's own mel_filters.npz), the model.py encoder (conv stem with stride 2 on conv2, concatenated sinusoids, attention with no key bias and d^-1/4 on q and k, pre-LN blocks, ln_post), the decoder (causal self-attention, unmasked cross-attention, tied output embedding), and a greedy decoding loop with EOT handling. No training. The full Whisper source is in refs/whisper-src. Problem 02 shows how audio LLMs use such an encoder differently: Qwen2-Audio (Whisper-large-v3 encoder + stride-2 average pool + linear projector) and Qwen3-Omni's AuT (1 s chunks, 3x Conv2d to 12.5 Hz, per-chunk positions, windowed attention) both splice their features into <|AUDIO|> placeholder slots of a decoder-only LLM via masked_scatter, instead of Whisper's cross-attention. Qwen papers and HF code are in refs/qwen. Problem 03 is the training objective: the multitask token sequence with previous-text context, shift-by-one teacher-forcing targets, a mask that hides only the previous-context text, and the stable token-level negative log-likelihood whose gradient reaches the audio encoder.",
   "depends_on": [],
   "created": "2026-11-19",
   "status": "ready",
@@ -34,7 +34,7 @@
         "greedy decode with EOT"
       ],
       "paper_refs": [
-        "\u00a72.2",
+        "§2.2",
         "Fig. 1",
         "audio.py",
         "model.py",
@@ -56,11 +56,30 @@
         "decoding from inputs_embeds"
       ],
       "paper_refs": [
-        "Qwen2-Audio \u00a72",
-        "Qwen3-Omni \u00a72.2",
-        "Qwen3-Omni \u00a72.4"
+        "Qwen2-Audio §2",
+        "Qwen3-Omni §2.2",
+        "Qwen3-Omni §2.4"
       ],
       "milestone": "Audio LLMs"
+    },
+    {
+      "id": "03-whisper-training-loss",
+      "title": "Whisper training loss: multitask sequence, teacher forcing, masked NLL",
+      "difficulty": "hard",
+      "runtime": "torch",
+      "concepts": [
+        "startofprev context + sot sequence + text + EOT",
+        "shift by one: position i predicts token i+1",
+        "mask only the previous-context text (language ID is trained)",
+        "stable NLL = logsumexp - z[y], token-level mean",
+        "teacher forcing = one causal pass",
+        "text loss trains the encoder through cross-attention"
+      ],
+      "paper_refs": [
+        "§2.3",
+        "Fig. 1"
+      ],
+      "milestone": "Whisper basics"
     }
   ]
 }
