@@ -138,3 +138,30 @@ whisper-manim-test:
 
 whisper-manim-clean:
 	rm -rf $(WM_DIR)/slides $(WM_DIR)/media $(WM_DIR)/videos
+
+# ------------------------------------------------------------ Soft-MTP lecture (ManimGL + manim-slides, ← / →)
+#   make mtp-manim                       render what changed, then present all 4 lessons
+#   make mtp-manim L=L3                  one lesson (any part of a scene name: L3_Trick, backward, ...)
+#   make mtp-manim Q=-l                  fast 480p while editing (default: --hd 1080p)
+#   make mtp-manim-html                  same slides in the browser (T = contents sidebar)
+.PHONY: mtp-manim mtp-manim-html mtp-manim-install mtp-manim-render mtp-manim-test mtp-manim-clean
+MTP_DIR := mtp/soft-mtp-manim
+MTP_ARGS = $(L) --quality=$(Q)
+
+mtp-manim-install:
+	cd $(MTP_DIR) && uv sync
+
+mtp-manim-render:
+	cd $(MTP_DIR) && uv run python render.py $(MTP_ARGS)
+
+mtp-manim:
+	cd $(MTP_DIR) && uv run python render.py $(MTP_ARGS) --present
+
+mtp-manim-html:
+	cd $(MTP_DIR) && uv run python render.py $(MTP_ARGS) --html
+
+mtp-manim-test:
+	cd $(MTP_DIR) && uv run pytest -q
+
+mtp-manim-clean:
+	rm -rf $(MTP_DIR)/slides $(MTP_DIR)/media $(MTP_DIR)/videos
