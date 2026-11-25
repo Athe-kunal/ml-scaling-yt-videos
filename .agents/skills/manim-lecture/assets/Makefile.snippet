@@ -1,0 +1,27 @@
+
+# ------------------------------------------------------------ __TITLE__ (ManimGL + manim-slides, ← / →)
+#   make __NAME__                   render what changed, then present all lessons
+#   make __NAME__ L=L2              one lesson (any part of a scene name)
+#   make __NAME__ Q=-l              fast 480p while editing (default: --hd 1080p)
+#   make __NAME__-html              same slides in the browser (T = contents sidebar)
+.PHONY: __NAME__ __NAME__-html __NAME__-install __NAME__-render __NAME__-test __NAME__-clean
+__VAR___DIR := __DIR__
+__VAR___ARGS = $(L) --quality=$(Q)
+
+__NAME__-install:
+	cd $(__VAR___DIR) && uv sync
+
+__NAME__-render:
+	cd $(__VAR___DIR) && uv run python render.py $(__VAR___ARGS)
+
+__NAME__:
+	cd $(__VAR___DIR) && uv run python render.py $(__VAR___ARGS) --present
+
+__NAME__-html:
+	cd $(__VAR___DIR) && uv run python render.py $(__VAR___ARGS) --html
+
+__NAME__-test:
+	cd $(__VAR___DIR) && uv run pytest -q
+
+__NAME__-clean:
+	rm -rf $(__VAR___DIR)/slides $(__VAR___DIR)/media $(__VAR___DIR)/videos
