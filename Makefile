@@ -165,3 +165,30 @@ mtp-manim-test:
 
 mtp-manim-clean:
 	rm -rf $(MTP_DIR)/slides $(MTP_DIR)/media $(MTP_DIR)/videos
+
+# ------------------------------------------------------------ Packing 2-bit weights (ManimGL + manim-slides, ← / →)
+#   make packing-manim                   render what changed, then present all 4 lessons
+#   make packing-manim L=L2              one lesson (any part of a scene name: L2_Pack, iter2, ...)
+#   make packing-manim Q=-l              fast 480p while editing (default: --hd 1080p)
+#   make packing-manim-html              same slides in the browser (T = contents sidebar)
+.PHONY: packing-manim packing-manim-html packing-manim-install packing-manim-render packing-manim-test packing-manim-clean
+PACK_DIR := quantization/packing-manim
+PACK_ARGS = $(L) --quality=$(Q)
+
+packing-manim-install:
+	cd $(PACK_DIR) && uv sync
+
+packing-manim-render:
+	cd $(PACK_DIR) && uv run python render.py $(PACK_ARGS)
+
+packing-manim:
+	cd $(PACK_DIR) && uv run python render.py $(PACK_ARGS) --present
+
+packing-manim-html:
+	cd $(PACK_DIR) && uv run python render.py $(PACK_ARGS) --html
+
+packing-manim-test:
+	cd $(PACK_DIR) && uv run pytest -q
+
+packing-manim-clean:
+	rm -rf $(PACK_DIR)/slides $(PACK_DIR)/media $(PACK_DIR)/videos
