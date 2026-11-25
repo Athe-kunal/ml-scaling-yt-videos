@@ -25,10 +25,21 @@ def pack_weights(values, bits):
     return packed
 
 
+def unpack_before_mask(packed, bits):
+    """The course's loop body: unpacked[idx] |= packed[i] >> (bits * j)  (|= into zeros = store)."""
+    out = [0] * (len(packed) * 8 // bits)
+    idx = 0
+    for p in packed:
+        for j in range(8 // bits):
+            out[idx] |= p >> (bits * j)
+            idx += 1
+    return out
+
+
 def unpack_weights(packed, bits):
-    """Reverse: shift slot j down to the bottom, then keep only `bits` bits."""
+    """Course order: shift everything in the loop, then ONE `unpacked_tensor &= mask` at the end."""
     mask = 2 ** bits - 1
-    return [(p >> (bits * j)) & mask for p in packed for j in range(8 // bits)]
+    return [v & mask for v in unpack_before_mask(packed, bits)]
 
 
 @dataclass
@@ -50,8 +61,8 @@ class UnpackStep:
     idx: int        # position in the unpacked output
     shift: int
     before: int     # packed[i]
-    shifted: int    # packed[i] >> shift
-    masked: int     # shifted & mask  → the recovered value
+    shifted: int    # packed[i] >> shift   (stored by the loop)
+    masked: int     # shifted & mask       (after the final &= mask)
 
 
 def pack_trace(values, bits=2):

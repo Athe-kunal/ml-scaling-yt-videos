@@ -28,18 +28,19 @@ PACK_SRC = """def pack_weights(uint8tensor, bits):
       unpacked_idx += 1
   return packed_tensor"""
 
-UNPACK_SRC = """def unpack_weights(packed_tensor, bits):
-  num_values = packed_tensor.shape[0] * 8 // bits
+UNPACK_SRC = """def unpack_weights(uint8tensor, bits):
+  num_values = uint8tensor.shape[0] * 8 // bits
   num_steps = 8 // bits
   unpacked_tensor = torch.zeros((num_values),
-                                dtype=torch.uint8)
+                    dtype=torch.uint8)
   unpacked_idx = 0
-  mask = 2 ** bits - 1   # 0b11
-  for i in range(packed_tensor.shape[0]):
+  mask = 2 ** bits - 1
+  for i in range(uint8tensor.shape[0]):
     for j in range(num_steps):
-      unpacked_tensor[unpacked_idx] = \\
-        (packed_tensor[i] >> (bits * j)) & mask
+      unpacked_tensor[unpacked_idx] |= \\
+        uint8tensor[i] >> (bits * j)
       unpacked_idx += 1
+  unpacked_tensor &= mask
   return unpacked_tensor"""
 
 KEYWORDS = ["def", "for", "in", "if", "raise", "return", "range"]
@@ -56,7 +57,7 @@ def _x(p):
 
 # ---------------------------------------------------------------- one byte
 class Byte(VGroup):
-    def __init__(self, n=0, occupied=None, label=None, index=True, label_color=SOFT, digit_size=30):
+    def __init__(self, n=0, occupied=None, label=None, index=True, label_color=SOFT, digit_size=30, label_size=28):
         super().__init__()
         self.n = n
         self.occ = set(range(4) if occupied is None else occupied)
@@ -69,7 +70,7 @@ class Byte(VGroup):
         self.add(self.frame, self.index)
         self.tiles = self.make_tiles(n, self.occ)
         self.add(self.tiles)
-        self.label = T(label, 28, label_color).next_to(self.frame, LEFT, buff=0.3) if label else VGroup()
+        self.label = T(label, label_size, label_color).next_to(self.frame, LEFT, buff=0.3) if label else VGroup()
         self.add(self.label)
 
     # -------------------------------------------------------- geometry
@@ -178,7 +179,7 @@ class CodePanel(VGroup):
                     cmap[re.compile(rf"\b{kw}\b")] = ACCENT
             if "#" in body:
                 cmap[re.compile(r"#.*")] = DIM
-            for op in ("|=", "<<", ">>", "& mask"):
+            for op in ("|=", "&=", "<<", ">>"):
                 if op in body:
                     cmap[op] = INK
             if cmap:

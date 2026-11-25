@@ -41,3 +41,10 @@ def test_unpack_roundtrip_and_mask():
 def test_bits_and_slots():
     assert toy.bits8(177) == [1, 0, 1, 1, 0, 0, 0, 1]
     assert toy.slots(177) == [1, 0, 3, 2]
+
+
+def test_unpack_course_order_masks_once_at_the_end():
+    # inside the loop the course only shifts (|= into zeros); one `&= mask` after the loop
+    assert toy.unpack_before_mask([177], 2) == [177, 44, 11, 2]
+    assert toy.unpack_before_mask([177, 255], 2) == [177, 44, 11, 2, 255, 63, 15, 3]
+    assert [v & 3 for v in toy.unpack_before_mask([177, 255], 2)] == toy.EX2
