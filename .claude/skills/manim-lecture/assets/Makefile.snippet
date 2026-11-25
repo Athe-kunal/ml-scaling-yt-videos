@@ -2,11 +2,11 @@
 # ------------------------------------------------------------ __TITLE__ (ManimGL + manim-slides, ← / →)
 #   make __NAME__                   render what changed, then present all lessons
 #   make __NAME__ L=L2              one lesson (any part of a scene name)
-#   make __NAME__ Q=-l              fast 480p while editing (default: --hd 1080p)
+#   make __NAME__ Q=-l              fast 480p while editing (default: auto = 4K on Retina/4K screens, else 1080p)
 #   make __NAME__-html              same slides in the browser (T = contents sidebar)
 .PHONY: __NAME__ __NAME__-html __NAME__-install __NAME__-render __NAME__-test __NAME__-clean
 __VAR___DIR := __DIR__
-__VAR___ARGS = $(L) --quality=$(Q)
+__VAR___ARGS = $(L) --quality=$(if $(filter command line environment,$(origin Q)),$(Q),auto)
 
 __NAME__-install:
 	cd $(__VAR___DIR) && uv sync

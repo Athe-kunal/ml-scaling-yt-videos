@@ -1,6 +1,6 @@
 """Render only the lecture sections whose code changed — in parallel — then present.
 
-    python render.py                     # render what changed (1080p), all lessons
+    python render.py                     # render what changed (auto: 4K on Retina/4K screens), all lessons
     python render.py L2 --quality=-l     # one lesson, fast 480p
     python render.py L2_Main_03 --present   # rehearse a single section
     python render.py --present | --html  # render, then open the player / browser version
@@ -16,6 +16,7 @@ import re
 import importlib
 import inspect
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -56,6 +57,26 @@ def sections():
     return out
 
 
+def screen_quality():
+    """Pick the render quality from the largest attached screen's physical pixels.
+
+    Video is raster: 1080p shown on a Retina / 4K screen is upscaled ~2x and text looks soft.
+    Render 4K whenever any screen is taller than 1080 physical pixels (downscaling stays sharp).
+    """
+    heights = []
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["system_profiler", "SPDisplaysDataType"], capture_output=True,
+                                 text=True, timeout=10).stdout
+            heights = [int(h) for h in re.findall(r"Resolution:\s*\d+\s*x\s*(\d+)", out)]
+        elif shutil.which("xrandr"):
+            out = subprocess.run(["xrandr"], capture_output=True, text=True, timeout=10).stdout
+            heights = [int(h) for h in re.findall(r"connected.*?\d+x(\d+)\+", out)]
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return "--uhd" if heights and max(heights) > 1080 else "--hd"
+
+
 def render_one(mod_name, scene, quality):
     shutil.rmtree(HERE / "videos" / scene, ignore_errors=True)  # stale *_temp.mp4 breaks manim-slides
     t0 = time.time()
@@ -76,13 +97,16 @@ def render_one(mod_name, scene, quality):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("only", nargs="*", help="filters on scene names, e.g. L2, L3_LogMel, probe")
-    ap.add_argument("--quality", default="--hd", help="manimgl flag: -l (480p), -m (720p), --hd (1080p)")
+    ap.add_argument("--quality", default="auto",
+                    help="auto (4K on Retina/4K screens, else 1080p) or a manimgl flag: -l, -m, --hd, --uhd")
     ap.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 4))
     ap.add_argument("--present", action="store_true")
     ap.add_argument("--html", action="store_true")
     ap.add_argument("--no-open", action="store_true", help="with --html: write the page but don't open it")
     ap.add_argument("--force", action="store_true", help="re-render even if unchanged")
     a = ap.parse_args()
+    if a.quality == "auto":
+        a.quality = screen_quality()
     sys.argv = sys.argv[:1]  # manimlib parses sys.argv when the lessons import it
 
     allsec = sections()

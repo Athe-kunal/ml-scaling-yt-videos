@@ -169,11 +169,11 @@ mtp-manim-clean:
 # ------------------------------------------------------------ Packing 2-bit weights (ManimGL + manim-slides, ← / →)
 #   make packing-manim                   render what changed, then present all 4 lessons
 #   make packing-manim L=L2              one lesson (any part of a scene name: L2_Pack, iter2, ...)
-#   make packing-manim Q=-l              fast 480p while editing (default: --hd 1080p)
+#   make packing-manim Q=-l              fast 480p while editing (default: auto = 4K on Retina/4K screens, else 1080p)
 #   make packing-manim-html              same slides in the browser (T = contents sidebar)
 .PHONY: packing-manim packing-manim-html packing-manim-install packing-manim-render packing-manim-test packing-manim-clean
 PACK_DIR := quantization/packing-manim
-PACK_ARGS = $(L) --quality=$(Q)
+PACK_ARGS = $(L) --quality=$(if $(filter command line environment,$(origin Q)),$(Q),auto)
 
 packing-manim-install:
 	cd $(PACK_DIR) && uv sync

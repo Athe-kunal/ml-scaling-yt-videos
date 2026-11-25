@@ -61,6 +61,10 @@ packing-manim). Read before writing lesson code; re-read when something renders 
 
 ## Environment
 
+- Slides are raster video: 1080p on a Retina / 4K screen is upscaled ~2× and text looks blurry.
+  render.py `--quality=auto` (the default) reads the screen's physical pixels and renders `--uhd` when
+  any screen is taller than 1080 px. Quality is part of the stamp, so switching re-renders.
+
 - Own uv venv per app; never let it join a root uv workspace (`uv init` silently adds one — revert).
 - `setuptools<81` (manimgl 1.7.2 imports pkg_resources; the warning is harmless).
 - Needs `dvisvgm` (brew). Installing it once broke ffmpeg via x265 → `brew upgrade ffmpeg`.
