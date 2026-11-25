@@ -1,0 +1,5 @@
+.venv/
+media/
+videos/
+slides/
+__pycache__/
