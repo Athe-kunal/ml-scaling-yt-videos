@@ -48,3 +48,12 @@ def test_unpack_course_order_masks_once_at_the_end():
     assert toy.unpack_before_mask([177], 2) == [177, 44, 11, 2]
     assert toy.unpack_before_mask([177, 255], 2) == [177, 44, 11, 2, 255, 63, 15, 3]
     assert [v & 3 for v in toy.unpack_before_mask([177, 255], 2)] == toy.EX2
+
+
+def test_unpack_occupancy_matches_right_shift():
+    # Byte.play_shift(RIGHT) maps occupied slots s -> s - k//2 (dropping < 0); a section that
+    # rebuilds unpacked[j] after its shift must show the same occupied slots
+    for j in range(4):
+        after_shift = {s - j for s in range(4) if s - j >= 0}
+        assert toy.unpack_occupancy(j) == after_shift
+    assert toy.unpack_occupancy(3) == {0}

@@ -212,6 +212,15 @@ class CodePanel(VGroup):
                 return r, line.index(marker)
         raise KeyError(marker)
 
+    def set_highlight(self, marker, token=None, color=GOLD):
+        """Same end state as highlight(), without animating (for rebuilding a section's start)."""
+        anim = self.highlight(marker, token, color)
+        for a in anim.animations:
+            a.begin()
+            a.interpolate(1)
+            a.finish()
+        return self
+
     def highlight(self, marker, token=None, color=GOLD, run_time=0.5):
         """Bar on the first line containing `marker`; box around `token` on that line (if given)."""
         r, _ = self.find(marker)
@@ -236,7 +245,7 @@ class VarBox(VGroup):
         super().__init__()
         self.names, self.size = names, size
         self.vals = {n: vals.get(n, "–") for n in names}
-        self.items = VGroup(*[self._item(n, self.vals[n], SOFT) for n in names])
+        self.items = VGroup(*[self._item(n, self.vals[n], ACCENT if n in vals else SOFT) for n in names])
         if cols and cols < len(names):
             self.items.arrange_in_grid(n_cols=cols, h_buff=0.6, v_buff=0.25, aligned_edge=LEFT)
         else:
@@ -294,6 +303,11 @@ class TensorRow(VGroup):
 
 
 # ---------------------------------------------------------------- the whole pack_weights stage
+def or_caption(s):
+    """Last caption of a pack step (also restored at the start of the next section)."""
+    return f"{toy.bstr(s.before)}  |  {toy.bstr(s.shifted)}  =  {toy.bstr(s.after)}"
+
+
 PX = 3.65      # right-column centre
 BYTE_X = 1.75  # left edge of every byte's cells on the stage
 
@@ -337,13 +351,8 @@ class PackStage:
     def restore(self, scene, k, caption=None, animate=False):
         self.build(k)
         mobs = self.mobjects()
-        if k > 0:  # every step ends with the bar on the |= line and the box on |=
-            r, c = self.code.find("|=")
-            y = (self.code._origin() + self.code.cell(r, 0))[1]
-            self.code.bar.move_to([self.code.bg.get_center()[0], y, 0]).set_fill(opacity=0.13)
-            x = (self.code._origin() + self.code.cell(r, c))[0]
-            self.code.box.become(Rectangle(width=2 * self.code.cw + 0.12, height=self.code.line_h * 0.95,
-                                           stroke_color=GOLD, stroke_width=3).move_to([x + self.code.cw, y, 0]))
+        if k > 0:  # every step ends with the bar and box on |=
+            self.code.set_highlight("|=", token="|=")
         if animate:
             scene.play(*[FadeIn(m) for m in mobs], run_time=0.8)
         else:
@@ -379,5 +388,5 @@ class PackStage:
         scene.play(self.code.highlight("|=", token="|="), cells.animate.move_to(target), run_time=rt + 0.2)
         scene.play(byte.set_value_anim(s.after, byte.occ | {s.j}, run_time=rt), FadeOut(cells), run_time=rt)
         if not fast:
-            scene.say(f"{toy.bstr(s.before)}  |  {toy.bstr(s.shifted)}  =  {toy.bstr(s.after)}")
+            scene.say(or_caption(s))
             scene.beat()

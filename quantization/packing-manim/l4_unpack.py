@@ -9,6 +9,13 @@ TRACE = toy.unpack_trace(PACKED)
 ROW_Y = [0.75, -0.2, -1.15, -2.1]             # unpacked_tensor[0..3]
 
 
+def shift_caption(s):
+    """Last caption of an unpack step (also restored at the start of the next section)."""
+    if s.shift:
+        return f"{s.before} >> {s.shift} = {s.shifted}: w[{s.idx}] now in bits 1–0", VALUE_COLOR[s.masked]
+    return "j = 0: no shift — w[0] already in bits 1–0", VALUE_COLOR[s.masked]
+
+
 class UnpackStage:
     """Code left; the packed byte on top right; the four output bytes below it."""
 
@@ -24,7 +31,7 @@ class UnpackStage:
         for j in range(4):
             if j < k:
                 n = TRACE[j].masked if masked else TRACE[j].shifted
-                occ = {0} if masked else set(range(4))
+                occ = {0} if masked else toy.unpack_occupancy(j)
             else:
                 n, occ = 0, set()
             b = Byte(n, occupied=occ, index=False, label=f"unpacked[{j}]", label_size=24).place(BYTE_X, ROW_Y[j])
@@ -39,9 +46,20 @@ class UnpackStage:
     def mobjects(self):
         return [self.code, self.src, self.src_name, self.vars, *self.out, *[r for r in self.reads]]
 
-    def restore(self, scene, k, masked=False):
+    def restore(self, scene, k, masked=False, animate=False):
+        """Rebuild the picture after step k-1. animate=False: appear exactly as the previous
+        section left it (bar on the >> line, same caption), so the sections join seamlessly."""
         self.build(k, masked)
-        scene.play(*[FadeIn(m) for m in self.mobjects()], run_time=0.8)
+        if k > 0:
+            self.code.set_highlight("uint8tensor[i] >>", token=">> (bits * j)")
+        if animate:
+            scene.play(*[FadeIn(m) for m in self.mobjects()], run_time=0.8)
+            return
+        scene.add(*self.mobjects())
+        if k > 0:
+            text, col = shift_caption(TRACE[k - 1])
+            scene.caption = T(text, 44, col).to_edge(DOWN, buff=0.35)
+            scene.add(scene.caption)
 
     def new_read(self, scene, j, n):
         new = self.read(self.out[j], n)
@@ -64,9 +82,7 @@ class UnpackStage:
             scene.say(f"shift right by 2·{s.j} = {s.shift}", VALUE_COLOR[s.masked])
             b.play_shift(scene, s.shift, RIGHT)
             self.new_read(scene, s.j, s.shifted)
-            scene.say(f"{s.before} >> {s.shift} = {s.shifted}: w[{s.idx}] now in bits 1–0", VALUE_COLOR[s.masked])
-        else:
-            scene.say("j = 0: no shift — w[0] already in bits 1–0", VALUE_COLOR[s.masked])
+        scene.say(*shift_caption(s))
         scene.beat()
 
 
@@ -79,7 +95,7 @@ class L4_Unpack(Lesson):
     def stage_at(self, k):
         if getattr(self, "stage", None) is None:
             self.stage = UnpackStage()
-            self.stage.restore(self, k)
+            self.stage.restore(self, k, animate=(k == 0))  # j0 follows a roadmap slide
         return self.stage
 
     def before_loop(self):
@@ -115,7 +131,7 @@ class L4_Unpack(Lesson):
     # ------------------------------------------------------------ unpacked_tensor &= mask
     def mask(self):
         st = UnpackStage()
-        st.restore(self, 4)
+        st.restore(self, 4, animate=True)  # follows a roadmap slide
         m = Byte(3, occupied={0}, index=True, label="mask", label_size=24, label_color=ACCENT)
         m.place(BYTE_X, 2.75)
         self.play(st.code.highlight("&= mask", token="unpacked_tensor &= mask"),

@@ -88,6 +88,11 @@ def unpack_trace(packed, bits=2):
     return steps
 
 
+def unpack_occupancy(j, bits=2):
+    """Slots of unpacked[j] still holding packed data after `>> bits*j`: the top j fall off."""
+    return set(range(8 // bits - j))
+
+
 def bits8(n):
     """[b7, b6, …, b0] — MSB first, the way the byte is drawn."""
     return [(n >> k) & 1 for k in range(7, -1, -1)]

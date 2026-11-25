@@ -1,10 +1,9 @@
 """Lesson 2 · pack_weights on [1, 0, 3, 2], one operation per press: load → shift → OR."""
 import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # noqa: E401
 from style import *  # noqa: F401,F403
-from bits import PackStage, mono
+from bits import PackStage, mono, or_caption
 import toy
 
-OR_CAPTION = lambda s: f"{toy.bstr(s.before)}  |  {toy.bstr(s.shifted)}  =  {toy.bstr(s.after)}"  # noqa: E731
 
 
 class L2_Pack(Lesson):
@@ -19,7 +18,7 @@ class L2_Pack(Lesson):
         """Reuse the stage when sections run back to back; rebuild it in a section scene."""
         if getattr(self, "stage", None) is None:
             self.stage = PackStage(toy.EX1)
-            cap = OR_CAPTION(self.trace[k - 1]) if (k > 0 and not animate) else None
+            cap = or_caption(self.trace[k - 1]) if (k > 0 and not animate) else None
             self.stage.restore(self, k, caption=cap, animate=animate)
         return self.stage
 
