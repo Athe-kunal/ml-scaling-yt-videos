@@ -86,6 +86,13 @@ class Byte(VGroup):
         t = T(text, size, color).next_to(b, direction, buff=0.08)
         return VGroup(b, t)
 
+    def dim_anim(self, o=0.25):
+        """Fade the byte back without filling its empty cells."""
+        tiles = [a for sq, d in self.tiles for a in (sq.animate.set_fill(opacity=float(sq.get_fill_opacity()) * o),
+                                                     d.animate.set_opacity(o))]
+        return AnimationGroup(*tiles, self.frame.animate.set_stroke(opacity=o),
+                              self.index.animate.set_opacity(o), self.label.animate.set_opacity(o))
+
     def digits(self):
         return VGroup(*[t[1] for t in self.tiles])
 
