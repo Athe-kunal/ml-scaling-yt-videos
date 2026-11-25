@@ -9,7 +9,7 @@ import re
 from style import *  # noqa: F401,F403
 import toy
 
-CELL, GAP = 0.56, 0.14
+CELL, GAP = 0.52, 0.12
 MONO = "Menlo"
 
 # notebook code, 2-space indent and the two longest lines wrapped so it fits half the frame
@@ -73,6 +73,11 @@ class Byte(VGroup):
         self.add(self.label)
 
     # -------------------------------------------------------- geometry
+    def place(self, frame_left, y):
+        """Put the 8 cells at a fixed left edge, so stacked bytes line up bit for bit."""
+        self.shift(np.array([frame_left - self.frame.get_left()[0], y - self.frame.get_y(), 0]))
+        return self
+
     def pos(self, p):
         return self.frame[0].get_center() + RIGHT * _x(p)
 
@@ -222,11 +227,15 @@ class CodePanel(VGroup):
 
 # ---------------------------------------------------------------- loop variables  i = 0   j = 2 ...
 class VarBox(VGroup):
-    def __init__(self, names, size=28, **vals):
+    def __init__(self, names, size=28, cols=None, **vals):
         super().__init__()
         self.names, self.size = names, size
         self.vals = {n: vals.get(n, "–") for n in names}
-        self.items = VGroup(*[self._item(n, self.vals[n], SOFT) for n in names]).arrange(RIGHT, buff=0.55)
+        self.items = VGroup(*[self._item(n, self.vals[n], SOFT) for n in names])
+        if cols and cols < len(names):
+            self.items.arrange_in_grid(n_cols=cols, h_buff=0.6, v_buff=0.25, aligned_edge=LEFT)
+        else:
+            self.items.arrange(RIGHT, buff=0.55)
         self.add(self.items)
 
     def _item(self, name, v, col):
@@ -277,3 +286,93 @@ class TensorRow(VGroup):
         new = mono(str(v), 32, col).move_to(self.boxes[i])
         return AnimationGroup(Transform(self.vals[i], new),
                               self.boxes[i].animate.set_stroke(col).set_fill(col, opacity=0.18))
+
+
+# ---------------------------------------------------------------- the whole pack_weights stage
+PX = 3.65      # right-column centre
+BYTE_X = 1.75  # left edge of every byte's cells on the stage
+
+
+class PackStage:
+    """Code left; tensor, loop variables, `value` scratch byte and packed byte(s) right.
+
+    `restore(scene, k)` rebuilds the picture as it is after trace step k-1 (k=0: before the
+    loop), so each lesson section can start exactly where the previous one ended."""
+
+    def __init__(self, values):
+        self.values = values
+        self.trace = toy.pack_trace(values)
+        self.n_bytes = len(self.trace) // 4
+
+    def build(self, k):
+        last = self.trace[k - 1] if k > 0 else None
+        self.code = CodePanel(PACK_SRC).move_to([-3.55, 0.3, 0])
+        box = 0.62 if len(self.values) <= 4 else 0.5
+        self.tensor = TensorRow(self.values, size=30 if box > 0.55 else 26, box=box).move_to([PX + 0.3, 2.75, 0])
+        self.tname = mono("uint8tensor", 20, DIM).next_to(self.tensor, LEFT, buff=0.2)
+        self.tensor.pointer.next_to(self.tensor.boxes[last.idx if last else 0], UP, buff=0.08)
+        v = dict(i=last.i, j=last.j, unpacked_idx=last.idx, **{"bits*j": last.shift}) if last else {}
+        self.vars = VarBox(["i", "j", "unpacked_idx", "bits*j"], size=24, cols=2, **v).move_to([PX, 1.45, 0])
+        self.value = Byte(last.shifted if last else 0, occupied={last.j} if last else set(), label="value")
+        self.value.place(BYTE_X, 0.05)
+        ys = [-1.55] if self.n_bytes == 1 else [-1.35, -2.55]
+        self.packed = []
+        for i in range(self.n_bytes):
+            done = [s for s in self.trace[:k] if s.i == i]
+            n = done[-1].after if done else 0
+            occ = {s.j for s in done}
+            b = Byte(n, occupied=occ, label=f"packed[{i}]", index=(i == 0))
+            b.place(BYTE_X, ys[i])
+            self.packed.append(b)
+        return self
+
+    def mobjects(self):
+        return [self.code, self.tensor, self.tname, self.tensor.pointer, self.vars, self.value, *self.packed]
+
+    def restore(self, scene, k, caption=None, animate=False):
+        self.build(k)
+        mobs = self.mobjects()
+        if k > 0:  # every step ends with the bar on the |= line and the box on |=
+            r, c = self.code.find("|=")
+            y = (self.code._origin() + self.code.cell(r, 0))[1]
+            self.code.bar.move_to([self.code.bg.get_center()[0], y, 0]).set_fill(opacity=0.13)
+            x = (self.code._origin() + self.code.cell(r, c))[0]
+            self.code.box.become(Rectangle(width=2 * self.code.cw + 0.12, height=self.code.line_h * 0.95,
+                                           stroke_color=GOLD, stroke_width=3).move_to([x + self.code.cw, y, 0]))
+        if animate:
+            scene.play(*[FadeIn(m) for m in mobs], run_time=0.8)
+        else:
+            scene.add(*mobs)
+        if caption:
+            scene.caption = T(caption, 44, SOFT).to_edge(DOWN, buff=0.35)
+            scene.add(scene.caption)
+
+    # -------------------------------------------------------- one inner-loop step: load → shift → OR
+    def iteration(self, scene, s, fast=False):
+        col = VALUE_COLOR[s.value]
+        byte = self.packed[s.i]
+        rt = 0.45 if fast else 0.8
+        # load
+        scene.play(self.code.highlight("<< (bits", token="uint8tensor[unpacked_idx]"),
+                   self.tensor.pointer_anim(s.idx),
+                   self.vars.update_anim(i=s.i, j=s.j, unpacked_idx=s.idx, **{"bits*j": s.shift}),
+                   self.value.set_value_anim(s.value, {0}, run_time=rt), run_time=rt)
+        if not fast:
+            scene.say(f"load uint8tensor[{s.idx}] = {s.value}", col)
+            scene.beat()
+        # shift
+        if not fast:
+            scene.play(self.code.highlight("<< (bits", token="<< (bits * j)"))
+            scene.say(f"shift left by 2·{s.j} = {s.shift}" if s.shift else "j = 0: no shift", col)
+        if s.shift:
+            self.value.play_shift(scene, s.shift, run_time=0.6 if fast else 1.3)
+        if not fast:
+            scene.beat()
+        # OR
+        cells = VGroup(self.value.tiles[6 - 2 * s.j], self.value.tiles[7 - 2 * s.j]).copy()
+        target = VGroup(byte.tiles[6 - 2 * s.j], byte.tiles[7 - 2 * s.j])
+        scene.play(self.code.highlight("|=", token="|="), cells.animate.move_to(target), run_time=rt + 0.2)
+        scene.play(byte.set_value_anim(s.after, byte.occ | {s.j}, run_time=rt), FadeOut(cells), run_time=rt)
+        if not fast:
+            scene.say(f"{toy.bstr(s.before)}  |  {toy.bstr(s.shifted)}  =  {toy.bstr(s.after)}")
+            scene.beat()
