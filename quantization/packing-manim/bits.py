@@ -147,11 +147,15 @@ class Byte(VGroup):
             incoming.add(t)
             anims.append(FadeIn(t, shift=self.pos(p) - self.pos(p - step * k)))
         scene.play(*anims, run_time=run_time)
-        scene.remove(incoming)
-        self.remove(self.tiles)
+        scene.remove(incoming)      # stand-alone copies, safe to drop
         self.n, self.occ = new_n, new_occ
-        self.tiles = self.make_tiles(new_n, new_occ)
-        self.add(self.tiles)
+        # reset the SAME 8 tile objects in place: swapping in new objects would split the
+        # byte's group in scene.mobjects (ManimGL restructures on remove) and hide it
+        for tile, fresh in zip(self.tiles, self.make_tiles(new_n, new_occ)):
+            tile.become(fresh)
+        # render the clean state once, so a beat ending here shows it. A counted play, not
+        # scene.wait(): manim-slides splits slides by play count, and wait() isn't counted
+        scene.play(Animation(self.tiles), run_time=0.1)
 
 
 # ---------------------------------------------------------------- the code, with a moving highlight
@@ -307,8 +311,8 @@ class PackStage:
     def build(self, k):
         last = self.trace[k - 1] if k > 0 else None
         self.code = CodePanel(PACK_SRC).move_to([-3.55, 0.3, 0])
-        box = 0.62 if len(self.values) <= 4 else 0.5
-        self.tensor = TensorRow(self.values, size=30 if box > 0.55 else 26, box=box).move_to([PX + 0.3, 2.75, 0])
+        box = 0.62 if len(self.values) <= 4 else 0.46
+        self.tensor = TensorRow(self.values, size=30 if box > 0.55 else 26, box=box).move_to([PX + (0.3 if len(self.values) <= 4 else 0.65), 2.75, 0])
         self.tname = mono("uint8tensor", 20, DIM).next_to(self.tensor, LEFT, buff=0.2)
         self.tensor.pointer.next_to(self.tensor.boxes[last.idx if last else 0], UP, buff=0.08)
         v = dict(i=last.i, j=last.j, unpacked_idx=last.idx, **{"bits*j": last.shift}) if last else {}
