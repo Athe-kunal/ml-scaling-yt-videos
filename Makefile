@@ -108,6 +108,20 @@ whisper-install:
 whisper:
 	cd $(WHISPER_DIR) && npm run dev -- --port $(WHISPER_PORT)
 
+# Floating point, step by step (React stepper): ← → steps, click bits to flip them
+.PHONY: float float-install float-test
+FLOAT_DIR := quantization/floating_point_numbers
+FLOAT_PORT ?= 5185
+
+float-install:
+	cd $(FLOAT_DIR) && npm install
+
+float:
+	cd $(FLOAT_DIR) && npm run dev -- --port $(FLOAT_PORT) --open
+
+float-test:
+	cd $(FLOAT_DIR) && npm test
+
 # Manim lecture slides (ManimGL + manim-slides): → next, ← previous, Q quit, F fullscreen
 # Each lesson is split into sections; only sections whose code changed re-render, in parallel.
 #   make whisper-manim                   render what changed, then present all lessons

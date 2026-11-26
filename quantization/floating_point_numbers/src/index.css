@@ -1,0 +1,17 @@
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; min-height: 100%; background: #0a0e14; }
+body { font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+
+/* flowchart | canvas */
+.vit-grid { display: grid; grid-template-columns: minmax(240px, 280px) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 1000px) { .vit-grid { grid-template-columns: 1fr; } }
+
+.flow { stroke-dasharray: 6 5; animation: flow 0.9s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -22; } }
+
+button:focus-visible { outline: 2px solid #6ef3dd; outline-offset: 2px; }
+canvas { display: block; }
+
+.scene { animation: rise .35s ease-out; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+input::placeholder { color: #94a1b2; }
