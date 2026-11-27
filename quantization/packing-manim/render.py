@@ -1,6 +1,6 @@
 """Render only the lecture sections whose code changed — in parallel — then present.
 
-    python render.py                     # render what changed (auto: 4K on Retina/4K screens), all lessons
+    python render.py                     # render what changed (auto: sized to the main screen), all lessons
     python render.py L2 --quality=-l     # one lesson, fast 480p
     python render.py L2_Pack_04 --present   # rehearse a single section
     python render.py --present | --html  # render, then open the player / browser version
@@ -54,24 +54,44 @@ def sections():
     return out
 
 
-def screen_quality():
-    """Pick the render quality from the largest attached screen's physical pixels.
-
-    Video is raster: 1080p shown on a Retina / 4K screen is upscaled ~2x and text looks soft.
-    Render 4K whenever any screen is taller than 1080 physical pixels (downscaling stays sharp).
-    """
-    heights = []
+def main_screen_px():
+    """Physical pixels (width, height) of the main screen, or None."""
     try:
         if sys.platform == "darwin":
             out = subprocess.run(["system_profiler", "SPDisplaysDataType"], capture_output=True,
                                  text=True, timeout=10).stdout
-            heights = [int(h) for h in re.findall(r"Resolution:\s*\d+\s*x\s*(\d+)", out)]
-        elif shutil.which("xrandr"):
+            last, first = None, None
+            for line in out.splitlines():
+                m = re.search(r"Resolution:\s*(\d+)\s*x\s*(\d+)", line)
+                if m:
+                    last = (int(m[1]), int(m[2]))
+                    first = first or last
+                if "Main Display: Yes" in line and last:
+                    return last
+            return first
+        if shutil.which("xrandr"):
             out = subprocess.run(["xrandr"], capture_output=True, text=True, timeout=10).stdout
-            heights = [int(h) for h in re.findall(r"connected.*?\d+x(\d+)\+", out)]
+            m = re.search(r"primary (\d+)x(\d+)\+", out) or re.search(r" connected (\d+)x(\d+)\+", out)
+            if m:
+                return int(m[1]), int(m[2])
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
-    return "--uhd" if heights and max(heights) > 1080 else "--hd"
+    return None
+
+
+def screen_quality():
+    """Render size = the largest 16:9 frame that fits the main screen's physical pixels.
+
+    Video is raster: smaller than the screen → upscaled and soft; bigger → the player has to
+    shrink it (and some players mis-place oversized video). Matching the screen avoids both:
+    Retina 3456×2234 → 3456×1944, 4K → 3840×2160, 1080p → 1920×1080. Capped at 4K, floor 720p.
+    """
+    px = main_screen_px()
+    if not px:
+        return "--hd"
+    k = min(px[0] // 16, px[1] // 9, 240)
+    k = max(80, k - k % 2)                    # even height for H.264
+    return f"--resolution={16 * k}x{9 * k}"
 
 
 def render_one(mod_name, scene, quality):
@@ -95,9 +115,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("only", nargs="*", help="filters on scene names, e.g. L2, L3_LogMel, probe")
     ap.add_argument("--quality", default="auto",
-                    help="auto (4K on Retina/4K screens, else 1080p) or a manimgl flag: -l, -m, --hd, --uhd")
+                    help="auto (match the main screen, e.g. 3456x1944 on Retina) or a manimgl flag: -l, -m, --hd, --uhd")
     ap.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 4))
-    ap.add_argument("--present", action="store_true")
+    ap.add_argument("--present", action="store_true", help="fullscreen browser presentation (fits any screen)")
+    ap.add_argument("--qt", action="store_true", help="with --present: the manim-slides Qt player instead")
     ap.add_argument("--html", action="store_true")
     ap.add_argument("--no-open", action="store_true", help="with --html: write the page but don't open it")
     ap.add_argument("--force", action="store_true", help="re-render even if unchanged")
@@ -141,25 +162,51 @@ def main():
         sys.exit(f"failed: {' '.join(failed)}")
 
     scenes = [s for _, s, _ in chosen]
-    if a.present:
+    if a.present and a.qt:
         subprocess.run([str(BIN), "present", *scenes, "--full-screen", "--aspect-ratio", "keep"])
-    if a.html:
-        import webbrowser
-        from sidebar import inject
-        from style import section_scene_name
-        out = HERE / "slides" / "lectures.html"
-        subprocess.run([str(BIN), "convert", *scenes, str(out)], check=True)
-        entries = []  # sidebar: one heading per lesson, one link per subtopic (its roadmap beat)
-        for mod_name, cls_name in LESSONS:
-            lesson = getattr(importlib.import_module(mod_name), cls_name)
-            sc = [(section_scene_name(lesson, i, s), lesson.TOPICS.get(s)) for i, s in enumerate(lesson.SECTIONS)]
-            sc = [x for x in sc if x[0] in scenes]
-            if sc:
-                entries.append((f"{lesson.NUM} · {lesson.TITLE}", sc))
-        inject(out, entries, HERE / "slides")
-        print(f"wrote {out}", flush=True)
-        if not a.no_open:
+    if a.html or (a.present and not a.qt):
+        out = write_html(scenes)
+        if a.present:
+            open_fullscreen(out)
+        elif not a.no_open:
+            import webbrowser
             webbrowser.open(out.as_uri())
+
+
+def write_html(scenes):
+    """All sections as one reveal.js page (video scaled to fit any window) + contents sidebar."""
+    from sidebar import inject
+    from style import section_scene_name
+    out = HERE / "slides" / "lectures.html"
+    subprocess.run([str(BIN), "convert", *scenes, str(out)], check=True)
+    entries = []  # sidebar: one heading per lesson, one link per subtopic (its roadmap beat)
+    for mod_name, cls_name in LESSONS:
+        lesson = getattr(importlib.import_module(mod_name), cls_name)
+        sc = [(section_scene_name(lesson, i, s), lesson.TOPICS.get(s)) for i, s in enumerate(lesson.SECTIONS)]
+        sc = [x for x in sc if x[0] in scenes]
+        if sc:
+            entries.append((f"{lesson.NUM} · {lesson.TITLE}", sc))
+    inject(out, entries, HERE / "slides")
+    print(f"wrote {out}", flush=True)
+    return out
+
+
+def open_fullscreen(page):
+    """Present in a borderless fullscreen browser window: the browser fits and centres the
+    video on whatever screen it is on (any size, any pixel density). Exit: ⌘Q / Alt+F4."""
+    url = page.as_uri()
+    chrome = {"darwin": ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+              "linux": [shutil.which("google-chrome") or "", shutil.which("chromium") or ""]}.get(sys.platform, [])
+    exe = next((c for c in chrome if c and Path(c).exists()), None)
+    if exe:
+        subprocess.Popen([exe, f"--app={url}", "--start-fullscreen", "--autoplay-policy=no-user-gesture-required",
+                          f"--user-data-dir={HERE / 'slides' / '.browser'}", "--no-first-run",
+                          "--no-default-browser-check"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("presenting fullscreen in the browser: ← → step · T contents · ⌘Q quit", flush=True)
+    else:
+        import webbrowser
+        webbrowser.open(url)
+        print("opened in the browser: press F for fullscreen · ← → step · T contents", flush=True)
 
 
 if __name__ == "__main__":

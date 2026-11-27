@@ -47,6 +47,7 @@ packing-manim). Read before writing lesson code; re-read when something renders 
 - Menlo glyph width ≈ 0.134 frame units per char at font_size 22 (0.146 at 24). Half the frame
   (~6.7 units) fits ~48 chars at size 22 → wrap code lines, 2-space indent.
 - `Text("")` is fine as an empty placeholder.
+- Menlo draws "." as a centred dot (looks like •) — render a binary point with the text font, align glyphs on DOWN.
 
 ## Live mobjects
 
@@ -61,10 +62,13 @@ packing-manim). Read before writing lesson code; re-read when something renders 
 
 ## Environment
 
-- Slides are raster video: 1080p on a Retina / 4K screen is upscaled ~2× and text looks blurry.
-  render.py `--quality=auto` (the default) reads the screen's physical pixels and renders `--uhd` when
-  any screen is taller than 1080 px. Quality is part of the stamp, so switching re-renders.
-
+- Slides are raster video: size them to the screen. render.py `--quality=auto` (default) renders the
+  largest 16:9 frame that fits the main screen's physical pixels (Retina 3456×2234 → 3456×1944,
+  4K → 3840×2160). Quality is part of the stamp, so a new screen re-renders once.
+- The manim-slides Qt player (QVideoWidget) showed slides offset to the right in fullscreen on a
+  Retina Mac. `make <name>` therefore presents the reveal.js page in a fullscreen Chrome app
+  window (background-size: contain → fits and centres on any screen); `make <name>-qt` keeps the
+  Qt player.
 - Own uv venv per app; never let it join a root uv workspace (`uv init` silently adds one — revert).
 - `setuptools<81` (manimgl 1.7.2 imports pkg_resources; the warning is harmless).
 - Needs `dvisvgm` (brew). Installing it once broke ffmpeg via x265 → `brew upgrade ffmpeg`.

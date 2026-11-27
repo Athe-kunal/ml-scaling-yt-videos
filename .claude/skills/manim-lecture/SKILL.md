@@ -115,12 +115,12 @@ cuts drift), never swap children of on-screen groups (reset with `become()`), no
 ```bash
 uv run --project <app> python .claude/skills/manim-lecture/scripts/join_check.py <app>   # SSIM ≥ 0.98 at every non-roadmap join
 make <slug>-manim-test
-make <slug>-manim-render            # once at screen quality (auto: 4K on Retina/4K), so `make <slug>-manim` starts instantly
+make <slug>-manim-render            # once at the screen's size (auto), so `make <slug>-manim` starts instantly
 make <slug>-manim-render            # again: must say "0 to render"
 ```
 
 Then tell the user how to run it:
-- `make <slug>-manim` — fullscreen player, → / ← to step, `L=L2` for one lesson, `Q=-l` for fast 480p (default `auto` renders 4K on Retina/4K screens so text stays sharp);
+- `make <slug>-manim` — fullscreen browser presentation that fits any screen, → / ← to step, **T** contents, `L=L2` for one lesson, `Q=-l` for fast 480p (default `auto` renders at the main screen's size); `make <slug>-manim-qt` for the Qt player;
 - `make <slug>-manim-html` — browser version; **T** toggles the contents sidebar (one heading per
   lesson, one link per roadmap topic).
 

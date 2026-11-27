@@ -154,7 +154,7 @@ whisper-manim-clean:
 	rm -rf $(WM_DIR)/slides $(WM_DIR)/media $(WM_DIR)/videos
 
 # ------------------------------------------------------------ Soft-MTP lecture (ManimGL + manim-slides, ← / →)
-#   make mtp-manim                       render what changed, then present all 4 lessons
+#   make mtp-manim                       render what changed, present fullscreen in the browser
 #   make mtp-manim L=L3                  one lesson (any part of a scene name: L3_Trick, backward, ...)
 #   make mtp-manim Q=-l                  fast 480p while editing (default: --hd 1080p)
 #   make mtp-manim-html                  same slides in the browser (T = contents sidebar)
@@ -181,11 +181,11 @@ mtp-manim-clean:
 	rm -rf $(MTP_DIR)/slides $(MTP_DIR)/media $(MTP_DIR)/videos
 
 # ------------------------------------------------------------ Packing 2-bit weights (ManimGL + manim-slides, ← / →)
-#   make packing-manim                   render what changed, then present all 4 lessons
+#   make packing-manim                   render what changed, present fullscreen in the browser
 #   make packing-manim L=L2              one lesson (any part of a scene name: L2_Pack, iter2, ...)
-#   make packing-manim Q=-l              fast 480p while editing (default: auto = 4K on Retina/4K screens, else 1080p)
+#   make packing-manim Q=-l              fast 480p while editing (default: auto = sized to the main screen)
 #   make packing-manim-html              same slides in the browser (T = contents sidebar)
-.PHONY: packing-manim packing-manim-html packing-manim-install packing-manim-render packing-manim-test packing-manim-clean
+.PHONY: packing-manim packing-manim-qt packing-manim-html packing-manim-install packing-manim-render packing-manim-test packing-manim-clean
 PACK_DIR := quantization/packing-manim
 PACK_ARGS = $(L) --quality=$(if $(filter command line environment,$(origin Q)),$(Q),auto)
 
@@ -198,6 +198,9 @@ packing-manim-render:
 packing-manim:
 	cd $(PACK_DIR) && uv run python render.py $(PACK_ARGS) --present
 
+packing-manim-qt:
+	cd $(PACK_DIR) && uv run python render.py $(PACK_ARGS) --present --qt
+
 packing-manim-html:
 	cd $(PACK_DIR) && uv run python render.py $(PACK_ARGS) --html
 
@@ -206,3 +209,33 @@ packing-manim-test:
 
 packing-manim-clean:
 	rm -rf $(PACK_DIR)/slides $(PACK_DIR)/media $(PACK_DIR)/videos
+
+# ------------------------------------------------------------ 17.125 to IEEE-754 (ManimGL + manim-slides, ← / →)
+#   make float-convert-manim                   render what changed, present fullscreen in the browser
+#   make float-convert-manim L=L2              one lesson (any part of a scene name)
+#   make float-convert-manim Q=-l              fast 480p while editing (default: auto = sized to the main screen)
+#   make float-convert-manim-html              same slides in the browser (T = contents sidebar)
+.PHONY: float-convert-manim float-convert-manim-qt float-convert-manim-html float-convert-manim-install float-convert-manim-render float-convert-manim-test float-convert-manim-clean
+FLOAT_CONVERT_MANIM_DIR := quantization/float-convert-manim
+FLOAT_CONVERT_MANIM_ARGS = $(L) --quality=$(if $(filter command line environment,$(origin Q)),$(Q),auto)
+
+float-convert-manim-install:
+	cd $(FLOAT_CONVERT_MANIM_DIR) && uv sync
+
+float-convert-manim-render:
+	cd $(FLOAT_CONVERT_MANIM_DIR) && uv run python render.py $(FLOAT_CONVERT_MANIM_ARGS)
+
+float-convert-manim:
+	cd $(FLOAT_CONVERT_MANIM_DIR) && uv run python render.py $(FLOAT_CONVERT_MANIM_ARGS) --present
+
+float-convert-manim-qt:
+	cd $(FLOAT_CONVERT_MANIM_DIR) && uv run python render.py $(FLOAT_CONVERT_MANIM_ARGS) --present --qt
+
+float-convert-manim-html:
+	cd $(FLOAT_CONVERT_MANIM_DIR) && uv run python render.py $(FLOAT_CONVERT_MANIM_ARGS) --html
+
+float-convert-manim-test:
+	cd $(FLOAT_CONVERT_MANIM_DIR) && uv run pytest -q
+
+float-convert-manim-clean:
+	rm -rf $(FLOAT_CONVERT_MANIM_DIR)/slides $(FLOAT_CONVERT_MANIM_DIR)/media $(FLOAT_CONVERT_MANIM_DIR)/videos
